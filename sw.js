@@ -1,5 +1,5 @@
 // Service worker для офлайн работы PWA
-const CACHE = 'dino-rhythm-v3';
+const CACHE = 'dino-rhythm-v4';
 const FILES = [
   './',
   './index.html',

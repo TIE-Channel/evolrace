@@ -48,12 +48,20 @@
   function resizeCanvas() {
     const winW = window.innerWidth;
     const winH = window.innerHeight;
-    canvas.width = winW;
-    // Если экран вертикальный - ограничиваем высоту шириной (получится квадрат)
-    canvas.height = Math.min(winH, winW);
+    // На мобильных делаем canvas в 2 раза больше внутри -
+    // спрайты остаются того же размера в пикселях canvas,
+    // но визуально на экране выглядят в 2 раза мельче.
+    const isMobile = (typeof matchMedia !== 'undefined') &&
+                     matchMedia('(pointer: coarse)').matches;
+    const scale = isMobile ? 2 : 1;
+    canvas.width = winW * scale;
+    canvas.height = winH * scale;
+    if (canvas.style) {
+      canvas.style.width = winW + 'px';
+      canvas.style.height = winH + 'px';
+    }
     W = canvas.width;
     H = canvas.height;
-    // Линия земли по центру экрана - всё действие идёт по середине высоты
     GROUND_Y = Math.floor(H / 2) + 80;
     DINO_X = Math.max(120, Math.floor(W * 0.32));
     try { if (dino) dino.homeX = DINO_X; } catch (e) {}
@@ -5366,11 +5374,6 @@
   }
 
   function drawReady() {
-    ctx.fillStyle = text();
-    ctx.font = 'bold 20px "Courier New", monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText('Нажми ПРОБЕЛ чтобы начать', W / 2, H / 2 - 10);
-    ctx.textAlign = 'left';
   }
 
   function drawGameOver() {
@@ -5471,14 +5474,11 @@
 })();
 </script>
 <script>
-// Регистрация service worker для офлайн-работы
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   });
 }
-
-// Тач-управление для мобильных - тап = прыжок, свайп вниз = присед
 (function() {
   const canvas = document.getElementById('game');
   if (!canvas) return;
