@@ -1,6 +1,6 @@
 {
-  "name": "Dino Rhythm Quest",
-  "short_name": "DinoQuest",
+  "name": "Evolrace",
+  "short_name": "Evolrace",
   "description": "Pixel-art rhythm runner with evolving hero, 10 epic bosses and procedural music",
   "start_url": "./",
   "scope": "./",

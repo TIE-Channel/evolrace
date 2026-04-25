@@ -9,7 +9,7 @@
 <meta name="theme-color" content="#b8e0ff">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Dino Rhythm Quest</title>
+<title>Evolrace</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
@@ -23,13 +23,15 @@
   .wrap {
     position: fixed;
     inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
     background: #b8e0ff;
   }
   canvas {
     display: block;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
     background: #b8e0ff;
   }
   /* На мобильных в портретной ориентации - предупреждение перевернуть */
@@ -56,8 +58,6 @@
 <body>
 <div class="rotate-msg">
   <div>
-    Поверните устройство горизонтально<br>
-    <br>
     ROTATE YOUR DEVICE
   </div>
 </div>
@@ -82,20 +82,53 @@ document.addEventListener('click', lockOrientation, { once: true });
 
   // Размер канваса = размер окна. Игровое поле тянется во все стороны без растягивания спрайтов.
   function resizeCanvas() {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-    W = canvas.width;
-    H = canvas.height;
+    const winW = window.innerWidth;
+    const winH = window.innerHeight;
+    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) ? window.devicePixelRatio : 1;
+    canvas.width = Math.ceil(winW * dpr);
+    canvas.height = Math.ceil(winH * dpr);
+    if (canvas.style) {
+      canvas.style.width = winW + 'px';
+      canvas.style.height = winH + 'px';
+    }
+    W = winW;
+    H = winH;
+    const oldGroundY = GROUND_Y;
     GROUND_Y = Math.floor(H / 2) + 80;
     DINO_X = Math.max(120, Math.floor(W * 0.32));
-    try { if (dino) dino.homeX = DINO_X; } catch (e) {}
+    // Обновляем позиции объектов которые привязаны к земле
+    try {
+      if (dino) {
+        dino.homeX = DINO_X;
+        // Если dino стоит на земле (или ещё не двигался) - обновляем y
+        if (dino.onGround || dino.vy === 0) {
+          dino.y = GROUND_Y - dino.h;
+        } else if (oldGroundY) {
+          // Сдвигаем относительно старого уровня земли
+          dino.y += (GROUND_Y - oldGroundY);
+        }
+      }
+    } catch (e) {}
   }
   let W = 800;
   let H = 220;
   let GROUND_Y;
   let DINO_X;
   resizeCanvas();
-  if (window.addEventListener) window.addEventListener('resize', resizeCanvas);
+  if (window.addEventListener) {
+    window.addEventListener('resize', resizeCanvas);
+    window.addEventListener('orientationchange', () => {
+      // На мобильных после поворота нужно подождать пока браузер применит изменения
+      setTimeout(resizeCanvas, 100);
+      setTimeout(resizeCanvas, 500);
+    });
+    // На мобильных address bar может скрыться через секунду после загрузки
+    window.addEventListener('load', () => {
+      setTimeout(resizeCanvas, 100);
+      setTimeout(resizeCanvas, 500);
+      setTimeout(resizeCanvas, 1500);
+    });
+  }
 
   const C = {
     skyDay: '#b8e0ff',
@@ -275,13 +308,22 @@ document.addEventListener('click', lockOrientation, { once: true });
   let prevDayPhase = 0.15;
   let monolith = null;
 
-  const STATE = { READY: 0, RUN: 1, OVER: 2 };
+  const STATE = { READY: 0, INTRO: 1, RUN: 2, OVER: 3, OUTRO: 4 };
   let state = STATE.READY;
+  let introTimer = 0;
+  let outroTimer = 0;
+  let outroPendingTimer = 0; // таймер 19-го финального уровня без босса
+  const INTRO_LEN = 360;
+  const OUTRO_LEN = 360;
+  const introBubbles = [];
+  // Позиция рыбы на READY-экране - используется как старт фазы 2 intro для плавного перехода
+  let readyFishX = 0;
+  let readyFishY = 0;
 
   let speed = 4;
   const gravity = 0.7;
   let score = 0;
-  let highScore = Number(localStorage.getItem('dinoHi') || 0);
+  let highScore = Number(localStorage.getItem('evolraceHi') || 0);
   let frameCount = 0;
 
   // Seeded RNG - один и тот же seed даёт одинаковые препятствия каждую игру
@@ -452,6 +494,7 @@ document.addEventListener('click', lockOrientation, { once: true });
   let cometCrashSignal = false;
   let consecutivePowerChords = 0;  // крэш (1/4такта) - огромные агрессивные
   const comets = [];
+  const newspapers = [];
   const COMET_TRAILS = { hh: 4, kick: 8, snare: 14, power: 22, crash: 32 };
 
   // Стая монстров - огр (самый большой) бежит последним, мелкий гоблин впереди
@@ -996,6 +1039,317 @@ document.addEventListener('click', lockOrientation, { once: true });
     speakSyllable(t + 0.75, 0.30, [570, 840, 2410], 110);
   }
 
+  // Вступительный амбиент - глубина океана, тихий гул, шум воды
+  // Амбиент финальной сцены - "возвращение в океан"
+  function playOutroMelody() {
+    if (!audioCtx) return;
+    const t0 = audioCtx.currentTime + 0.1;
+    const dur = 8;
+    // Глубокий гул - возвращение в воду
+    const drone1 = audioCtx.createOscillator();
+    drone1.type = 'sine';
+    drone1.frequency.value = 55;
+    const droneG1 = audioCtx.createGain();
+    droneG1.gain.setValueAtTime(0, t0);
+    droneG1.gain.linearRampToValueAtTime(0.18, t0 + 1.5);
+    droneG1.gain.linearRampToValueAtTime(0.15, t0 + dur - 1);
+    droneG1.gain.linearRampToValueAtTime(0, t0 + dur);
+    drone1.connect(droneG1).connect(masterOut);
+    drone1.start(t0);
+    drone1.stop(t0 + dur + 0.1);
+
+    // Светлый обертон - "достижение"
+    const drone2 = audioCtx.createOscillator();
+    drone2.type = 'sine';
+    drone2.frequency.value = 220;
+    const drone2Mod = audioCtx.createOscillator();
+    drone2Mod.frequency.value = 0.2;
+    const drone2ModG = audioCtx.createGain();
+    drone2ModG.gain.value = 2;
+    drone2Mod.connect(drone2ModG).connect(drone2.frequency);
+    const droneG2 = audioCtx.createGain();
+    droneG2.gain.setValueAtTime(0, t0);
+    droneG2.gain.linearRampToValueAtTime(0.06, t0 + 2);
+    droneG2.gain.linearRampToValueAtTime(0.06, t0 + dur - 1);
+    droneG2.gain.linearRampToValueAtTime(0, t0 + dur);
+    drone2.connect(droneG2).connect(masterOut);
+    drone2.start(t0);
+    drone2Mod.start(t0);
+    drone2.stop(t0 + dur + 0.1);
+    drone2Mod.stop(t0 + dur + 0.1);
+
+    // Третий обертон - чуть выше, добавляет торжественности
+    const drone3 = audioCtx.createOscillator();
+    drone3.type = 'sine';
+    drone3.frequency.value = 330; // E4
+    const droneG3 = audioCtx.createGain();
+    droneG3.gain.setValueAtTime(0, t0 + 1);
+    droneG3.gain.linearRampToValueAtTime(0.05, t0 + 3);
+    droneG3.gain.linearRampToValueAtTime(0.05, t0 + dur - 1);
+    droneG3.gain.linearRampToValueAtTime(0, t0 + dur);
+    drone3.connect(droneG3).connect(masterOut);
+    drone3.start(t0 + 1);
+    drone3.stop(t0 + dur + 0.1);
+
+    // Подводный шум
+    const noiseSize = audioCtx.sampleRate * dur;
+    const noiseBuf = audioCtx.createBuffer(1, noiseSize, audioCtx.sampleRate);
+    const noiseData = noiseBuf.getChannelData(0);
+    for (let i = 0; i < noiseSize; i++) noiseData[i] = Math.random() * 2 - 1;
+    const noiseSrc = audioCtx.createBufferSource();
+    noiseSrc.buffer = noiseBuf;
+    const noiseFilter = audioCtx.createBiquadFilter();
+    noiseFilter.type = 'lowpass';
+    noiseFilter.frequency.value = 400;
+    const noiseGain = audioCtx.createGain();
+    noiseGain.gain.setValueAtTime(0, t0);
+    noiseGain.gain.linearRampToValueAtTime(0.06, t0 + 3);
+    noiseGain.gain.linearRampToValueAtTime(0.06, t0 + dur - 1);
+    noiseGain.gain.linearRampToValueAtTime(0, t0 + dur);
+    noiseSrc.connect(noiseFilter).connect(noiseGain).connect(masterOut);
+    noiseSrc.start(t0);
+
+    // Всплеск когда рыба ныряет
+    const splashT = t0 + 2.7;
+    const splashSize = audioCtx.sampleRate * 0.5;
+    const splashBuf = audioCtx.createBuffer(1, splashSize, audioCtx.sampleRate);
+    const splashData = splashBuf.getChannelData(0);
+    for (let i = 0; i < splashSize; i++) {
+      splashData[i] = (Math.random() * 2 - 1) * Math.exp(-i / splashSize * 4);
+    }
+    const splashSrc = audioCtx.createBufferSource();
+    splashSrc.buffer = splashBuf;
+    const splashFilter = audioCtx.createBiquadFilter();
+    splashFilter.type = 'highpass';
+    splashFilter.frequency.value = 800;
+    const splashGain = audioCtx.createGain();
+    splashGain.gain.value = 0.12;
+    splashSrc.connect(splashFilter).connect(splashGain).connect(masterOut);
+    splashSrc.start(splashT);
+  }
+
+  function playIntroMelody() {
+    if (!audioCtx) return;
+    const t0 = audioCtx.currentTime + 0.1;
+    const dur = 4.5;
+
+    // === БАСОВЫЙ ГУЛ - очень низкий, "глубокая вода" ===
+    // A0 = 27.5Hz - почти инфразвук
+    const drone1 = audioCtx.createOscillator();
+    drone1.type = 'sine';
+    drone1.frequency.value = 55; // A1
+    const droneG1 = audioCtx.createGain();
+    droneG1.gain.setValueAtTime(0, t0);
+    droneG1.gain.linearRampToValueAtTime(0.15, t0 + 1.5);
+    droneG1.gain.linearRampToValueAtTime(0.15, t0 + dur - 1);
+    droneG1.gain.linearRampToValueAtTime(0, t0 + dur);
+    drone1.connect(droneG1).connect(masterOut);
+    drone1.start(t0);
+    drone1.stop(t0 + dur + 0.1);
+
+    // Обертон чуть выше для глубины
+    const drone2 = audioCtx.createOscillator();
+    drone2.type = 'sine';
+    drone2.frequency.value = 110; // A2
+    // Лёгкая модуляция - ощущение волн
+    const droneMod = audioCtx.createOscillator();
+    droneMod.frequency.value = 0.15;
+    const droneModG = audioCtx.createGain();
+    droneModG.gain.value = 1.5;
+    droneMod.connect(droneModG).connect(drone2.frequency);
+    const droneG2 = audioCtx.createGain();
+    droneG2.gain.setValueAtTime(0, t0);
+    droneG2.gain.linearRampToValueAtTime(0.06, t0 + 2);
+    droneG2.gain.linearRampToValueAtTime(0.06, t0 + dur - 1);
+    droneG2.gain.linearRampToValueAtTime(0, t0 + dur);
+    drone2.connect(droneG2).connect(masterOut);
+    drone2.start(t0);
+    droneMod.start(t0);
+    drone2.stop(t0 + dur + 0.1);
+    droneMod.stop(t0 + dur + 0.1);
+
+    // Тихий "светлый" обертон в финале (когда выходит на сушу)
+    const drone3 = audioCtx.createOscillator();
+    drone3.type = 'sine';
+    drone3.frequency.value = 220; // A3
+    const droneG3 = audioCtx.createGain();
+    droneG3.gain.setValueAtTime(0, t0);
+    droneG3.gain.setValueAtTime(0, t0 + 1.5);  // молчит первые 1.5 сек
+    droneG3.gain.linearRampToValueAtTime(0.04, t0 + 2.5);
+    droneG3.gain.linearRampToValueAtTime(0.04, t0 + dur - 0.5);
+    droneG3.gain.linearRampToValueAtTime(0, t0 + dur);
+    drone3.connect(droneG3).connect(masterOut);
+    drone3.start(t0 + 1.5);
+    drone3.stop(t0 + dur + 0.1);
+
+    // === ПОДВОДНЫЙ ШУМ - белый шум через lowpass-фильтр ===
+    const noiseLen = dur;
+    const bufferSize = audioCtx.sampleRate * noiseLen;
+    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = Math.random() * 2 - 1;
+    }
+    const noiseSrc = audioCtx.createBufferSource();
+    noiseSrc.buffer = buffer;
+    // Lowpass для глухого подводного шума
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 400;
+    filter.Q.value = 1;
+    const noiseGain = audioCtx.createGain();
+    noiseGain.gain.setValueAtTime(0, t0);
+    noiseGain.gain.linearRampToValueAtTime(0.08, t0 + 1);
+    // К концу шум стихает, переходит в "ветер на суше"
+    noiseGain.gain.linearRampToValueAtTime(0.08, t0 + 3);
+    noiseGain.gain.linearRampToValueAtTime(0.04, t0 + 4);
+    noiseGain.gain.linearRampToValueAtTime(0, t0 + dur);
+    noiseSrc.connect(filter).connect(noiseGain).connect(masterOut);
+    noiseSrc.start(t0);
+
+    // === ПУЗЫРЬКОВЫЕ ЗВУКИ - редкие, тихие ===
+    for (let i = 0; i < 5; i++) {
+      const bt = t0 + 0.5 + i * 0.6 + Math.random() * 0.3;
+      if (bt > t0 + 3) break; // только пока под водой
+      const bubbleOsc = audioCtx.createOscillator();
+      bubbleOsc.type = 'sine';
+      const startFreq = 600 + Math.random() * 300;
+      bubbleOsc.frequency.setValueAtTime(startFreq, bt);
+      bubbleOsc.frequency.exponentialRampToValueAtTime(startFreq * 0.4, bt + 0.18);
+      const bubbleGain = audioCtx.createGain();
+      bubbleGain.gain.setValueAtTime(0, bt);
+      bubbleGain.gain.linearRampToValueAtTime(0.04, bt + 0.01);
+      bubbleGain.gain.linearRampToValueAtTime(0, bt + 0.18);
+      bubbleOsc.connect(bubbleGain).connect(masterOut);
+      bubbleOsc.start(bt);
+      bubbleOsc.stop(bt + 0.25);
+    }
+
+    // === ВСПЛЕСК ВОДЫ когда рыба выпрыгивает ===
+    // intro теперь стартует с фазы 2 (4.2 секунды), фаза 3 прыжок на 0.7-1.5 сек
+    const splashT = t0 + 0.7;
+    const splashLen = 0.5;
+    const splashSize = audioCtx.sampleRate * splashLen;
+    const splashBuf = audioCtx.createBuffer(1, splashSize, audioCtx.sampleRate);
+    const splashData = splashBuf.getChannelData(0);
+    for (let i = 0; i < splashSize; i++) {
+      splashData[i] = (Math.random() * 2 - 1) * Math.exp(-i / splashSize * 4);
+    }
+    const splashSrc = audioCtx.createBufferSource();
+    splashSrc.buffer = splashBuf;
+    const splashFilter = audioCtx.createBiquadFilter();
+    splashFilter.type = 'highpass';
+    splashFilter.frequency.value = 800;
+    const splashGain = audioCtx.createGain();
+    splashGain.gain.value = 0.12;
+    splashSrc.connect(splashFilter).connect(splashGain).connect(masterOut);
+    splashSrc.start(splashT);
+
+    // === ВЫРАЗИТЕЛЬНЫЙ АМБИЕНТНЫЙ ЗВУК ТРАНСФОРМАЦИИ - на 1.5 секунды ===
+    const transT = t0 + 1.5;
+
+    // 1. Whoosh - нарастающий шум, "проезжающий" вверх по частоте
+    const whooshLen = 0.6;
+    const whooshSize = audioCtx.sampleRate * whooshLen;
+    const whooshBuf = audioCtx.createBuffer(1, whooshSize, audioCtx.sampleRate);
+    const whooshData = whooshBuf.getChannelData(0);
+    for (let i = 0; i < whooshSize; i++) {
+      whooshData[i] = Math.random() * 2 - 1;
+    }
+    const whooshSrc = audioCtx.createBufferSource();
+    whooshSrc.buffer = whooshBuf;
+    const whooshFilter = audioCtx.createBiquadFilter();
+    whooshFilter.type = 'bandpass';
+    whooshFilter.frequency.setValueAtTime(300, transT - 0.3);
+    whooshFilter.frequency.exponentialRampToValueAtTime(2000, transT + 0.2);
+    whooshFilter.Q.value = 1.5;
+    const whooshGain = audioCtx.createGain();
+    whooshGain.gain.setValueAtTime(0, transT - 0.3);
+    whooshGain.gain.linearRampToValueAtTime(0.14, transT);
+    whooshGain.gain.linearRampToValueAtTime(0, transT + 0.4);
+    whooshSrc.connect(whooshFilter).connect(whooshGain).connect(masterOut);
+    whooshSrc.start(transT - 0.3);
+
+    // 2. Sub-bass impact - глубокий низкий "удар" момента превращения
+    const subOsc = audioCtx.createOscillator();
+    subOsc.type = 'sine';
+    subOsc.frequency.setValueAtTime(80, transT);
+    subOsc.frequency.exponentialRampToValueAtTime(40, transT + 1.5);
+    const subGain = audioCtx.createGain();
+    subGain.gain.setValueAtTime(0, transT);
+    subGain.gain.linearRampToValueAtTime(0.22, transT + 0.05);
+    subGain.gain.exponentialRampToValueAtTime(0.001, transT + 2.0);
+    subOsc.connect(subGain).connect(masterOut);
+    subOsc.start(transT);
+    subOsc.stop(transT + 2.1);
+
+    // 3. Атмосферный swell - длинная гармоника, нарастает и медленно стихает
+    // Без явной мелодии - просто атмосферное полотно из 3 расстроенных тонов
+    const swellFreqs = [220, 330.5, 440.7]; // A3, ~E4 (расстроенный), ~A4 (расстроенный)
+    for (let i = 0; i < swellFreqs.length; i++) {
+      const swellOsc = audioCtx.createOscillator();
+      swellOsc.type = 'sine';
+      swellOsc.frequency.value = swellFreqs[i];
+      const swellGain = audioCtx.createGain();
+      swellGain.gain.setValueAtTime(0, transT);
+      // Плавная атака (не сразу удар, а нарастание)
+      swellGain.gain.linearRampToValueAtTime(0.07, transT + 0.4);
+      // Долгий sustain с лёгким спадом
+      swellGain.gain.linearRampToValueAtTime(0.05, transT + 1.5);
+      // Медленное затухание
+      swellGain.gain.linearRampToValueAtTime(0, transT + 2.5);
+      // Лёгкий лоупасс для мягкости
+      const swellFilter = audioCtx.createBiquadFilter();
+      swellFilter.type = 'lowpass';
+      swellFilter.frequency.value = 2000;
+      swellOsc.connect(swellFilter).connect(swellGain).connect(masterOut);
+      swellOsc.start(transT);
+      swellOsc.stop(transT + 2.7);
+    }
+
+    // 4. Едва слышимый "шиммер" - верхний обертон даёт мерцание
+    // Тихий шум через узкий bandpass на высокой частоте
+    const shimmerSize = audioCtx.sampleRate * 2;
+    const shimmerBuf = audioCtx.createBuffer(1, shimmerSize, audioCtx.sampleRate);
+    const shimmerData = shimmerBuf.getChannelData(0);
+    for (let i = 0; i < shimmerSize; i++) {
+      shimmerData[i] = Math.random() * 2 - 1;
+    }
+    const shimmerSrc = audioCtx.createBufferSource();
+    shimmerSrc.buffer = shimmerBuf;
+    const shimmerFilter = audioCtx.createBiquadFilter();
+    shimmerFilter.type = 'bandpass';
+    shimmerFilter.frequency.value = 4000;
+    shimmerFilter.Q.value = 8;
+    const shimmerGain = audioCtx.createGain();
+    shimmerGain.gain.setValueAtTime(0, transT);
+    shimmerGain.gain.linearRampToValueAtTime(0.04, transT + 0.5);
+    shimmerGain.gain.linearRampToValueAtTime(0, transT + 2.0);
+    shimmerSrc.connect(shimmerFilter).connect(shimmerGain).connect(masterOut);
+    shimmerSrc.start(transT);
+
+    // === ВЕТЕР - после выхода из воды ===
+    const windSize = audioCtx.sampleRate * 3;
+    const windBuf = audioCtx.createBuffer(1, windSize, audioCtx.sampleRate);
+    const windData = windBuf.getChannelData(0);
+    for (let i = 0; i < windSize; i++) {
+      windData[i] = Math.random() * 2 - 1;
+    }
+    const windSrc = audioCtx.createBufferSource();
+    windSrc.buffer = windBuf;
+    const windFilter = audioCtx.createBiquadFilter();
+    windFilter.type = 'bandpass';
+    windFilter.frequency.value = 600;
+    windFilter.Q.value = 0.5;
+    const windGain = audioCtx.createGain();
+    windGain.gain.setValueAtTime(0, t0 + 3);
+    windGain.gain.linearRampToValueAtTime(0.04, t0 + 4);
+    windGain.gain.linearRampToValueAtTime(0.04, t0 + dur - 0.5);
+    windGain.gain.linearRampToValueAtTime(0, t0 + dur);
+    windSrc.connect(windFilter).connect(windGain).connect(masterOut);
+    windSrc.start(t0 + 3);
+  }
+
   function onBeat(absStep, p) {
     const bar = Math.floor(absStep / PATTERN_LEN);
     const bar4 = bar % 4;
@@ -1078,6 +1432,15 @@ document.addEventListener('click', lockOrientation, { once: true });
   }
 
   function startGame() {
+    state = STATE.INTRO;
+    // Запускаем со второй фазы (всплытие) - первая фаза (плавание) уже была на READY-экране
+    introTimer = Math.floor(INTRO_LEN * 0.70);
+    dino.evolution = 0;
+    initAudio();
+    playIntroMelody();
+  }
+
+  function startRun() {
     state = STATE.RUN;
     initAudio();
     if (audioCtx) {
@@ -1098,6 +1461,11 @@ document.addEventListener('click', lockOrientation, { once: true });
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
     if (state === STATE.READY && (e.code === 'Space' || e.code === 'ArrowUp')) { startGame(); return; }
     if (state === STATE.OVER && (e.code === 'Space' || e.code === 'KeyR' || e.code === 'ArrowUp')) { resetGame(); startGame(); return; }
+    if (state === STATE.OUTRO && outroTimer <= 0 && (e.code === 'Space' || e.code === 'KeyR' || e.code === 'ArrowUp')) {
+      resetGame();
+      state = STATE.READY;
+      return;
+    }
     if (state !== STATE.RUN) return;
     if (e.code === 'Space') {
       if (dino.riding) dismount();
@@ -1119,6 +1487,12 @@ document.addEventListener('click', lockOrientation, { once: true });
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
     if (state === STATE.READY) { startGame(); return; }
     if (state === STATE.OVER) { resetGame(); startGame(); return; }
+    if (state === STATE.OUTRO && outroTimer <= 0) {
+      resetGame();
+      state = STATE.READY;
+      return;
+    }
+    if (state === STATE.OUTRO) return;
     if (dino.riding) dismount();
     else doJump();
   });
@@ -1164,6 +1538,7 @@ document.addEventListener('click', lockOrientation, { once: true });
     nextCrowdIn = 600;
     pendingJumps.length = 0;
     comets.length = 0;
+    newspapers.length = 0;
     POWER_PATTERN = new Array(64).fill(0);
     POWER_PATTERN[16] = 1; POWER_PATTERN[24] = 1;
     POWER_PATTERN[48] = 1; POWER_PATTERN[56] = 1;
@@ -1175,6 +1550,8 @@ document.addEventListener('click', lockOrientation, { once: true });
     rainbowHitCounter = 0;
     activeBoss = null;
     bossDefeated = 0;
+    outroPendingTimer = 0;
+    outroTimer = 0;
     bgStage = 0;
     prevDayPhase = 0.15;
     // Сброс прогрессии музыки на исходную (минор A) и POWER_PATTERN
@@ -1193,8 +1570,47 @@ document.addEventListener('click', lockOrientation, { once: true });
     }
   }
 
+  // Газеты в лицо при эволюции из пещерного человека в воина
+  function spawnNewspapers() {
+    const targetX = dino.x + dino.w / 2;
+    const targetY = dino.y + 12; // в лицо
+    // 5 газет с небольшой задержкой друг от друга
+    for (let i = 0; i < 5; i++) {
+      // Стартовая позиция справа за экраном
+      const startX = W + 30 + i * 40;
+      const startY = 30 + Math.random() * (GROUND_Y - 80);
+      const flightTime = 30 + i * 4; // кадров полёта
+      const vx = (targetX - startX) / flightTime;
+      const vy = (targetY - startY) / flightTime - 0.5 * 0.4 * flightTime; // дуга
+      newspapers.push({
+        x: startX,
+        y: startY,
+        vx: vx,
+        vy: vy,
+        rot: Math.random() * Math.PI * 2,
+        rotSpeed: 0.2 + Math.random() * 0.2,
+        delay: i * 8,
+        flightTime: flightTime,
+        framesLived: 0,
+        hit: false,
+        life: 200
+      });
+    }
+  }
+
+  // Вычисляет стадию (0..9) по количеству убитых боссов с зеркальным циклом
+  // bossDefeated:  0,1..9, 10..18,  19
+  // stage:         0,1..9,  8..0,   0 (финальный lizard - последний босс перед outro)
+  function evoStageForBoss(n) {
+    if (n <= 9) return n;
+    if (n <= 18) return 18 - n;
+    return 0; // финальный 19-й уровень - lizard повторно
+  }
+
   function spawnBoss() {
-    const type = BOSS_TYPES[bossDefeated % BOSS_TYPES.length];
+    // Босс соответствует стадии эволюции с зеркальным циклом
+    const bossStage = evoStageForBoss(bossDefeated);
+    const type = BOSS_TYPES[bossStage];
     activeBoss = {
       type: type.id,
       x: W + 30,         // появляется за правым краем экрана
@@ -1253,8 +1669,20 @@ document.addEventListener('click', lockOrientation, { once: true });
         if (b.hp <= 0) {
           bossDefeated++;
           score += 200;
-          // Эволюция героя - после каждого босса следующая стадия
-          dino.evolution = Math.min(9, dino.evolution + 1);
+          // Эволюция героя по зеркальному циклу - после 9-й стадии идёт обратно
+          const oldEvo = dino.evolution;
+          dino.evolution = evoStageForBoss(bossDefeated);
+          // После 18-й победы (вернулись к ящерице) - запускается финальный 19-й уровень без босса
+          if (bossDefeated === 18) {
+            outroPendingTimer = 720; // ~12 секунд бега до outro
+            activeBoss = null;
+            return;
+          }
+          // Когда из пещерного человека (5) становится воином (6) - газеты в лицо
+          // Газеты при переходе пещерный человек ↔ воин (5↔6) в обе стороны
+          if ((oldEvo === 5 && dino.evolution === 6) || (oldEvo === 6 && dino.evolution === 5)) {
+            spawnNewspapers();
+          }
           activeBoss = null;
           // Обелиск пробегает через сцену после победы над боссом
           monolith = {
@@ -1286,7 +1714,7 @@ document.addEventListener('click', lockOrientation, { once: true });
       state = STATE.OVER;
       if (Math.floor(score) > highScore) {
         highScore = Math.floor(score);
-        localStorage.setItem('dinoHi', String(highScore));
+        localStorage.setItem('evolraceHi', String(highScore));
       }
     }
   }
@@ -1460,8 +1888,27 @@ document.addEventListener('click', lockOrientation, { once: true });
   function update() {
     if (state !== STATE.RUN) return;
     frameCount++;
-    speed += 0.0003;
+    // Скорость нарастает в первой половине игры (стадии 0..9 - вперёд)
+    // и постепенно замедляется во второй (стадии 9..0 - обратно)
+    if (bossDefeated < 10) {
+      speed += 0.0003;
+    } else {
+      // На обратной фазе скорость замедляется обратно к стартовой
+      speed = Math.max(3.5, speed - 0.0003);
+    }
     score += 0.15;
+
+    // Финальный 19-й уровень - бежим без босса до outro
+    if (outroPendingTimer > 0) {
+      outroPendingTimer--;
+      if (outroPendingTimer === 0) {
+        state = STATE.OUTRO;
+        outroTimer = OUTRO_LEN;
+        activeBoss = null;
+        if (typeof playOutroMelody === 'function') playOutroMelody();
+        return;
+      }
+    }
 
     // Фолбэк: если аудио не работает - сами создаём сигналы по частоте равной музыкальной (140 BPM)
     if (!audioCtx) {
@@ -1478,8 +1925,8 @@ document.addEventListener('click', lockOrientation, { once: true });
     dayPhase = ((score / 1400) + 0.15) % 1;
     night = nightFactor() > 0.5;
 
-    // Спавн босса на заходе солнца (0.55) или луны (~0.05)
-    if (!activeBoss && state === STATE.RUN && score > 80) {
+    // Спавн босса на заходе солнца (0.55) или луны (~0.05) - не спавним в финальном уровне
+    if (!activeBoss && state === STATE.RUN && score > 80 && outroPendingTimer === 0) {
       const crossedSunset = prevDayPhase < 0.55 && dayPhase >= 0.55 && dayPhase < 0.58;
       const crossedMoonset = prevDayPhase > 0.95 && dayPhase < 0.1;
       if (crossedSunset || crossedMoonset) spawnBoss();
@@ -1560,7 +2007,7 @@ document.addEventListener('click', lockOrientation, { once: true });
             state = STATE.OVER;
             if (Math.floor(score) > highScore) {
               highScore = Math.floor(score);
-              try { localStorage.setItem('dinoHi', highScore); } catch (e) {}
+              try { localStorage.setItem('evolraceHi', highScore); } catch (e) {}
             }
           }
         }
@@ -2137,6 +2584,46 @@ document.addEventListener('click', lockOrientation, { once: true });
     for (let i = comets.length - 1; i >= 0; i--) {
       const c = comets[i];
       if (c.x < -100 || c.life <= 0 || c.y > GROUND_Y - 20) comets.splice(i, 1);
+    }
+
+    // Газеты в лицо при эволюции в воина
+    for (const np of newspapers) {
+      if (np.delay > 0) {
+        np.delay--;
+        continue;
+      }
+      np.framesLived++;
+      if (!np.hit && np.framesLived <= np.flightTime) {
+        // Полёт по дуге к голове dino
+        np.x += np.vx;
+        np.y += np.vy;
+        np.vy += 0.4;
+        np.rot += np.rotSpeed;
+      } else {
+        if (!np.hit) {
+          np.hit = true;
+          // Отскок от лица в случайную сторону
+          np.vx = -2 - Math.random() * 2;
+          np.vy = -3 - Math.random() * 2;
+          np.rotSpeed = -0.3 + Math.random() * 0.6;
+        }
+        np.x += np.vx - speed * 0.5;
+        np.y += np.vy;
+        np.vy += 0.45;
+        np.rot += np.rotSpeed;
+        // Приземление
+        const g = terrainHeight(np.x);
+        if (g !== null && np.y > g - 6) {
+          np.y = g - 6;
+          np.vy = 0;
+          np.vx = -speed;
+          np.rotSpeed = 0;
+        }
+      }
+      np.life--;
+    }
+    for (let i = newspapers.length - 1; i >= 0; i--) {
+      if (newspapers[i].life <= 0 || newspapers[i].x < -30) newspapers.splice(i, 1);
     }
 
     // Сбрасываем ритмические сигналы (применены в этом кадре)
@@ -4312,6 +4799,37 @@ document.addEventListener('click', lockOrientation, { once: true });
     crash: { trail: '#ff0080', head: '#ff4040', core: '#ffff60', glow: '#ff80a0', size: 6, glowSize: 4 }
   };
 
+  function drawNewspaper(np) {
+    if (np.delay > 0) return;
+    ctx.save();
+    ctx.translate(np.x, np.y);
+    ctx.rotate(np.rot);
+    // Белый лист
+    ctx.fillStyle = '#f8f4e8';
+    ctx.fillRect(-7, -10, 14, 20);
+    // Чёрный заголовок
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(-6, -9, 12, 2);
+    ctx.fillRect(-5, -6, 10, 1);
+    // Колонки текста - линии-полоски
+    ctx.fillRect(-5, -3, 4, 1);
+    ctx.fillRect(-5, -1, 4, 1);
+    ctx.fillRect(-5, 1, 4, 1);
+    ctx.fillRect(-5, 3, 3, 1);
+    ctx.fillRect(0, -3, 4, 1);
+    ctx.fillRect(0, -1, 4, 1);
+    ctx.fillRect(0, 1, 4, 1);
+    ctx.fillRect(0, 3, 4, 1);
+    // Картинка-блок внизу
+    ctx.fillStyle = '#888';
+    ctx.fillRect(-4, 5, 8, 4);
+    // Тень-кант
+    ctx.fillStyle = '#a89878';
+    ctx.fillRect(-7, 9, 14, 1);
+    ctx.fillRect(6, -10, 1, 20);
+    ctx.restore();
+  }
+
   function drawComet(c) {
     const st = COMET_STYLES[c.kind] || COMET_STYLES.snare;
     const trailLen = c.trail.length;
@@ -5398,6 +5916,592 @@ document.addEventListener('click', lockOrientation, { once: true });
   }
 
   function drawReady() {
+    // Стартовый экран = ровно та же сцена что в фазе 1 intro
+    // Камера: фокус на focusXStart, focusYStart, зум 4.5
+    const focusXStart = DINO_X + 22;
+    const focusYStart = GROUND_Y + 30;
+    const zoom = 4.5;
+    const tt = frameCount;
+    const waterY = GROUND_Y - 4;
+
+    ctx.save();
+    ctx.translate(W / 2, H / 2);
+    ctx.scale(zoom, zoom);
+    ctx.translate(-focusXStart, -focusYStart);
+
+    // НЕБО над водой
+    ctx.fillStyle = '#b8e0ff';
+    ctx.fillRect(focusXStart - W * 2, focusYStart - H * 2, W * 4, waterY - (focusYStart - H * 2));
+    // Облака
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    const cloudOff = (tt * 0.1) % 180;
+    for (let i = -3; i < 4; i++) {
+      const cx = focusXStart + i * 180 + cloudOff;
+      const cy = waterY - 80 - (i % 2) * 30;
+      ctx.fillRect(cx, cy, 30, 8);
+      ctx.fillRect(cx + 6, cy - 4, 18, 4);
+    }
+    // Солнце
+    ctx.fillStyle = 'rgba(255,240,180,0.6)';
+    const sunX = focusXStart + 60;
+    const sunY = waterY - 110;
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, 12, 0, Math.PI * 2);
+    ctx.fill();
+    // ВОДА
+    ctx.fillStyle = '#0a2040';
+    ctx.fillRect(focusXStart - W * 2, waterY, W * 4, H * 4);
+    // Поверхность
+    ctx.fillStyle = '#4080c0';
+    ctx.fillRect(focusXStart - W * 2, waterY, W * 4, 3);
+    // Лучи света
+    ctx.fillStyle = 'rgba(180,220,255,0.20)';
+    const lightOff = (tt * 0.2) % 30;
+    for (let i = -10; i < 10; i++) {
+      const lx = focusXStart + i * 30 + lightOff;
+      ctx.fillRect(lx, waterY + 4, 2, 200);
+    }
+    // Рябь
+    ctx.fillStyle = 'rgba(180,220,255,0.7)';
+    for (let x = -W; x < W; x += 8) {
+      const wY = waterY + Math.sin((x + tt * 0.5) * 0.1) * 1;
+      ctx.fillRect(focusXStart + x, wY, 4, 1);
+    }
+
+    // Пузыри в воде - анимация по frameCount как в intro
+    ctx.lineWidth = 1;
+    for (const bb of introBubbles) {
+      const bx = focusXStart + (bb.x - W / 2) * 0.5;
+      const by = waterY + 5 + ((bb.y % 200) / 200) * 145;
+      ctx.strokeStyle = 'rgba(220,240,255,0.7)';
+      ctx.beginPath();
+      ctx.arc(bx, by, bb.sz, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(180,220,255,0.25)';
+      ctx.beginPath();
+      ctx.arc(bx, by, Math.max(0.5, bb.sz - 0.5), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.fillRect(bx - 1, by - 1, 1, 1);
+    }
+
+    // Рыба плавает в воде - бумерангом туда-сюда (зацикленное движение)
+    readyFishX = focusXStart - 32 + Math.sin(tt * 0.02) * 12;
+    readyFishY = focusYStart + 5 + Math.sin(tt * 0.04) * 5;
+    const wag = Math.sin(tt * 0.08) * 0.08;
+    drawIntroFish(readyFishX, readyFishY, false, wag);
+
+    ctx.restore();
+
+    // Заголовок EVOLRACE в морских тонах по центру неба
+    // Поверхность воды на экране = H/2 + (waterY - focusYStart) * zoom
+    // Центр неба = середина между верхом экрана (0) и поверхностью воды
+    const waterYOnScreen = H / 2 + (waterY - focusYStart) * zoom;
+    const skyCenterY = Math.max(40, waterYOnScreen / 2);
+    ctx.save();
+    ctx.font = 'bold 56px "Courier New", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // Тень
+    ctx.fillStyle = 'rgba(0,40,80,0.5)';
+    ctx.fillText('EVOLRACE', W / 2 + 2, skyCenterY + 2);
+    // Градиент морской волны
+    const titleGrd = ctx.createLinearGradient(0, skyCenterY - 30, 0, skyCenterY + 30);
+    titleGrd.addColorStop(0, '#a8e8ff');
+    titleGrd.addColorStop(0.5, '#40c0e0');
+    titleGrd.addColorStop(1, '#1060a0');
+    ctx.fillStyle = titleGrd;
+    ctx.fillText('EVOLRACE', W / 2, skyCenterY);
+    // Контур тёмно-синий
+    ctx.strokeStyle = '#0a2040';
+    ctx.lineWidth = 2;
+    ctx.strokeText('EVOLRACE', W / 2, skyCenterY);
+    ctx.restore();
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  function drawIntro() {
+    const t = 1 - introTimer / INTRO_LEN;
+    // Плавная easeInOut функция
+    const ease = (x) => x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
+    // Smoothstep - ещё плавнее
+    const smooth = (x) => x * x * (3 - 2 * x);
+
+    // Точка фокуса камеры
+    // В подводной фазе focusY ниже линии воды - сверху видно небо, снизу вода с рыбой
+    const focusXStart = DINO_X + 22;
+    const focusYStart = GROUND_Y + 30; // ниже воды чтобы поверхность была в верхней трети
+    const focusXEnd = W / 2;
+    const focusYEnd = H / 2;
+
+    // Плавная интерполяция фокуса камеры (двигается одновременно с зумом)
+    let camProg;
+    if (t < 0.55) camProg = 0;
+    else if (t < 0.95) camProg = smooth((t - 0.55) / 0.40);
+    else camProg = 1;
+    const focusX = focusXStart + (focusXEnd - focusXStart) * camProg;
+    const focusY = focusYStart + (focusYEnd - focusYStart) * camProg;
+
+    // Зум плавный
+    let zoom;
+    if (t < 0.55) {
+      zoom = 4.5;
+    } else if (t < 0.95) {
+      const zt = smooth((t - 0.55) / 0.40);
+      zoom = 4.5 - zt * 3.5; // 4.5 → 1.0
+    } else {
+      zoom = 1;
+    }
+
+    ctx.save();
+    ctx.translate(W / 2, H / 2);
+    ctx.scale(zoom, zoom);
+    ctx.translate(-focusX, -focusY);
+
+    // === ФОН - плавный переход от подводного к небу ===
+    const waterY = GROUND_Y - 4;
+    let onLandT;
+    if (t < 0.40) onLandT = 0;
+    else if (t < 0.55) onLandT = ease((t - 0.40) / 0.15);
+    else onLandT = 1;
+
+    // НЕБО над водой - всегда голубое сверху waterY
+    ctx.fillStyle = '#b8e0ff';
+    ctx.fillRect(focusX - W * 2, focusY - H * 2, W * 4, waterY - (focusY - H * 2));
+    // Облака-силуэты (только в подводной фазе - вид сверху воды)
+    if (onLandT < 1) {
+      ctx.fillStyle = 'rgba(255,255,255,' + (0.7 * (1 - onLandT)) + ')';
+      const cloudOff = (introTimer * 0.1) % 180;
+      for (let i = -3; i < 4; i++) {
+        const cx = focusXStart + i * 180 + cloudOff;
+        const cy = waterY - 80 - (i % 2) * 30;
+        ctx.fillRect(cx, cy, 30, 8);
+        ctx.fillRect(cx + 6, cy - 4, 18, 4);
+      }
+      // Солнце - размытое пятно над водой
+      ctx.fillStyle = 'rgba(255,240,180,' + (0.6 * (1 - onLandT)) + ')';
+      const sunX = focusXStart + 60;
+      const sunY = waterY - 110;
+      ctx.beginPath();
+      ctx.arc(sunX, sunY, 12, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // ВОДА ниже waterY
+    ctx.fillStyle = '#0a2040';
+    ctx.fillRect(focusX - W * 2, waterY, W * 4, H * 4);
+    // Поверхность воды - тонкая линия
+    ctx.fillStyle = '#4080c0';
+    ctx.fillRect(focusX - W * 2, waterY, W * 4, 3);
+    // Лучи света через поверхность - проникают вниз
+    if (onLandT < 1) {
+      const lightAlpha = 0.20 * (1 - onLandT);
+      ctx.fillStyle = 'rgba(180,220,255,' + lightAlpha + ')';
+      const lightOff = (introTimer * 0.2) % 30;
+      for (let i = -10; i < 10; i++) {
+        const lx = focusXStart + i * 30 + lightOff;
+        ctx.fillRect(lx, waterY + 4, 2, 200);
+      }
+      // Рябь поверхности
+      ctx.fillStyle = 'rgba(180,220,255,' + (0.7 * (1 - onLandT)) + ')';
+      for (let x = -W; x < W; x += 8) {
+        const wY = waterY + Math.sin((x + introTimer * 0.5) * 0.1) * 1;
+        ctx.fillRect(focusXStart + x, wY, 4, 1);
+      }
+    }
+    // На стадии "выход" небо постепенно заменяет воду полностью
+    if (onLandT > 0) {
+      // Стираем нижнюю часть водой/землёй ниже линии земли в обычной игре
+      ctx.fillStyle = 'rgba(184,224,255,' + onLandT + ')';
+      ctx.fillRect(focusX - W * 2, focusY - H * 2, W * 4, GROUND_Y - 2 - (focusY - H * 2));
+      ctx.fillStyle = 'rgba(138,106,58,' + onLandT + ')';
+      ctx.fillRect(focusX - W * 2, GROUND_Y - 2, W * 4, H * 2);
+      ctx.fillStyle = 'rgba(212,168,136,' + onLandT + ')';
+      ctx.fillRect(focusX - W * 2, GROUND_Y - 2, W * 4, 2);
+    }
+    // Слева ещё видна вода после выхода
+    if (t > 0.55 && t < 0.85) {
+      const waterAlpha = Math.max(0, 1 - (t - 0.55) / 0.30);
+      ctx.fillStyle = 'rgba(40,90,180,' + (0.4 * waterAlpha) + ')';
+      ctx.fillRect(focusXStart - W, waterY + 4, W - 60, 100);
+    }
+
+    // === ПУЗЫРИ В ВОДЕ ===
+    if (t < 0.60) {
+      const bubbleAlpha = t < 0.55 ? 1 : 1 * (1 - (t - 0.55) / 0.05);
+      for (const bb of introBubbles) {
+        // Позиция пузыря - в водном пространстве, между waterY+5 и waterY+150
+        const bx = focusXStart + (bb.x - W / 2) * 0.5;
+        const by = waterY + 5 + ((bb.y % 200) / 200) * 145;
+        // Кольцо
+        ctx.strokeStyle = 'rgba(220,240,255,' + (0.7 * bubbleAlpha) + ')';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(bx, by, bb.sz, 0, Math.PI * 2);
+        ctx.stroke();
+        // Заливка
+        ctx.fillStyle = 'rgba(180,220,255,' + (0.25 * bubbleAlpha) + ')';
+        ctx.beginPath();
+        ctx.arc(bx, by, Math.max(0.5, bb.sz - 0.5), 0, Math.PI * 2);
+        ctx.fill();
+        // Блик
+        ctx.fillStyle = 'rgba(255,255,255,' + (0.9 * bubbleAlpha) + ')';
+        ctx.fillRect(bx - 1, by - 1, 1, 1);
+      }
+    }
+
+    // === РЫБА / ЯЩЕРИЦА ===
+    if (t < 0.30) {
+      // Фаза 1: плывёт под водой (на READY-экране показывается зацикленно, при старте сразу пропускаем)
+      const swim1T = ease(t / 0.30);
+      const baseX = (focusXStart - 32) + swim1T * 14;
+      const baseY = focusYStart + 5;
+      const wobbleAmp = 1 - swim1T * 0.7;
+      const fishX = baseX + Math.sin(introTimer * 0.02) * 12 * wobbleAmp;
+      const fishY = baseY + Math.sin(introTimer * 0.04) * 5 * wobbleAmp;
+      const wag = Math.sin(introTimer * 0.08) * 0.08;
+      drawIntroFish(fishX, fishY, false, wag);
+    } else if (t < 0.42) {
+      // Фаза 2: всплытие
+      // Старт берём из позиции рыбы на READY-экране (плавный переход без рывка)
+      const swim2T = ease((t - 0.30) / 0.12);
+      const sx = readyFishX || (focusXStart - 18);
+      const sy = readyFishY || (focusYStart + 5);
+      const ex = focusXStart - 12, ey = waterY + 8;
+      const baseX = sx + (ex - sx) * swim2T;
+      const baseY = sy + (ey - sy) * swim2T;
+      const wobbleAmp = 0.3 * (1 - swim2T);
+      const fishX = baseX + Math.sin(introTimer * 0.10) * 6 * wobbleAmp;
+      const fishY = baseY + Math.sin(introTimer * 0.08) * 3 * wobbleAmp;
+      const wag = Math.sin(introTimer * 0.12) * 0.10;
+      drawIntroFish(fishX, fishY, false, wag);
+    } else if (t < 0.55) {
+      // Фаза 3: прыжок из воды над поверхностью
+      const jumpT = ease((t - 0.42) / 0.13);
+      // Старт ТОЧНО там где закончилась фаза 2 (focusXStart-12, waterY+8)
+      const sx = focusXStart - 12, sy = waterY + 8;
+      // Цель прыжка - точка где начнётся трансформация (focusXStart, GROUND_Y-8)
+      const ex = focusXStart, ey = GROUND_Y - 8;
+      // Параболическая дуга
+      const linX = sx + (ex - sx) * jumpT;
+      const linY = sy + (ey - sy) * jumpT;
+      // Дополнительный подъём (парабола)
+      const arc = -Math.sin(jumpT * Math.PI) * 35;
+      const fishX = linX;
+      const fishY = linY + arc;
+      const rotation = jumpT * Math.PI * 0.35;
+      drawIntroFish(fishX, fishY, true, rotation);
+      // Брызги в начале прыжка
+      if (jumpT < 0.25) {
+        ctx.fillStyle = 'rgba(180,220,255,' + (0.9 * (1 - jumpT * 4)) + ')';
+        for (let i = 0; i < 8; i++) {
+          const ang = -Math.PI / 2 - 0.7 + (i / 8) * 1.4;
+          const dist = jumpT * 50;
+          ctx.fillRect(sx + Math.cos(ang) * dist, waterY + Math.sin(ang) * dist - 5, 2, 2);
+        }
+      }
+    } else if (t < 0.80) {
+      // Фаза 4: трансформация на земле
+      // Старт ТОЧНО там где закончилась фаза 3 (focusXStart, GROUND_Y-8)
+      const flopT = ease((t - 0.55) / 0.25);
+      const fxStart = focusXStart;
+      const fxEnd = dino.x + dino.w / 2;
+      const fx = fxStart + (fxEnd - fxStart) * flopT;
+      const fy = GROUND_Y - 8;
+      drawIntroFishToLizard(fx, fy, flopT);
+    } else {
+      drawLizard();
+    }
+
+    ctx.restore();
+
+    // Fade-in в начале
+    if (t < 0.05) {
+      const fadeT = 1 - t / 0.05;
+      ctx.fillStyle = 'rgba(0,0,0,' + fadeT + ')';
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+
+  // Рыба - простой пиксельный спрайт
+  function drawIntroFish(cx, cy, jumping, rot) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    if (rot) ctx.rotate(rot);
+    // Тело
+    ctx.fillStyle = '#4080a0';
+    ctx.fillRect(-12, -6, 20, 12);
+    // Светлое брюшко
+    ctx.fillStyle = '#80b0c8';
+    ctx.fillRect(-10, 0, 16, 5);
+    // Хвост
+    ctx.fillStyle = '#3070a0';
+    ctx.fillRect(-18, -5, 6, 4);
+    ctx.fillRect(-18, 1, 6, 4);
+    ctx.fillRect(-15, -2, 3, 4);
+    // Плавник верхний
+    ctx.fillRect(-4, -10, 8, 4);
+    // Плавник боковой (когда не прыгает)
+    if (!jumping) {
+      ctx.fillRect(-2, 4, 5, 3);
+    }
+    // Глаз
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(2, -3, 3, 3);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(3, -2, 2, 2);
+    // Жабры/линия
+    ctx.fillStyle = '#3070a0';
+    ctx.fillRect(-2, -5, 1, 9);
+    ctx.restore();
+  }
+
+  // Промежуточная стадия - рыба превращается в ящерицу
+  function drawIntroFishToLizard(cx, cy, t) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    // Тело - меняется от рыбы (синяя) к ящерице (зелёная)
+    const r = Math.floor(0x40 + (0x7d - 0x40) * t);
+    const g = Math.floor(0x80 + (0x9b - 0x80) * t);
+    const b = Math.floor(0xa0 + (0x3a - 0xa0) * t);
+    const bodyColor = 'rgb(' + r + ',' + g + ',' + b + ')';
+    const lightColor = 'rgb(' + Math.min(255, r + 40) + ',' + Math.min(255, g + 40) + ',' + Math.min(255, b + 40) + ')';
+    // Удлиняемое тело
+    const bodyW = 20 + t * 8;
+    const bodyH = 12;
+    ctx.fillStyle = bodyColor;
+    ctx.fillRect(-bodyW / 2, -bodyH / 2, bodyW, bodyH);
+    ctx.fillStyle = lightColor;
+    ctx.fillRect(-bodyW / 2 + 2, 0, bodyW - 4, 4);
+    // Хвост укорачивается
+    const tailW = 6 - t * 3;
+    ctx.fillStyle = bodyColor;
+    if (tailW > 0) {
+      ctx.fillRect(-bodyW / 2 - tailW, -3, tailW, 6);
+    }
+    // Появляются лапки (чем больше t, тем длиннее)
+    const legLen = t * 6;
+    if (legLen > 1) {
+      ctx.fillStyle = '#5a7220';
+      ctx.fillRect(-bodyW / 2 + 5, bodyH / 2, 3, legLen);
+      ctx.fillRect(bodyW / 2 - 8, bodyH / 2, 3, legLen);
+    }
+    // Голова - постепенно появляется
+    if (t > 0.3) {
+      ctx.fillStyle = bodyColor;
+      ctx.fillRect(bodyW / 2 - 4, -7, 8, 10);
+      // Глаз
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(bodyW / 2 - 1, -4, 3, 3);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(bodyW / 2, -3, 2, 2);
+    } else {
+      // Старый рыбий глаз ещё виден
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(bodyW / 2 - 6, -3, 3, 3);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(bodyW / 2 - 5, -2, 2, 2);
+    }
+    // Гребень-шипы появляются
+    if (t > 0.5) {
+      ctx.fillStyle = '#5a7220';
+      ctx.fillRect(-4, -bodyH / 2 - 2, 2, 2);
+      ctx.fillRect(2, -bodyH / 2 - 2, 2, 2);
+    }
+    ctx.restore();
+  }
+
+  function drawOutro() {
+    const t = 1 - outroTimer / OUTRO_LEN;
+    const ease = (x) => x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
+    const smooth = (x) => x * x * (3 - 2 * x);
+
+    // Этапы (в обратном порядке от intro):
+    // 0.00-0.20: камера плавно зумится с 1× до 4.5×, фокус смещается к точке погружения
+    // 0.20-0.40: ящерица превращается обратно в рыбу
+    // 0.40-0.55: рыба прыгает в воду (короткая дуга)
+    // 0.55-0.85: рыба погружается в глубину, плывёт
+    // 0.85-1.00: появляется текст
+    // outroTimer == 0: финальный кадр держится бесконечно (текст + рыба)
+
+    const focusXEnd = DINO_X + 22;
+    const focusYEnd = GROUND_Y + 30;
+    const focusXStart = W / 2;
+    const focusYStart = H / 2;
+
+    // Зум и фокус - в первой четверти плавно входим в подводную сцену
+    let zoom, focusX, focusY;
+    if (t < 0.20) {
+      const zt = smooth(t / 0.20);
+      zoom = 1 + zt * 3.5; // 1 → 4.5
+      focusX = focusXStart + (focusXEnd - focusXStart) * zt;
+      focusY = focusYStart + (focusYEnd - focusYStart) * zt;
+    } else {
+      zoom = 4.5;
+      focusX = focusXEnd;
+      focusY = focusYEnd;
+    }
+
+    ctx.save();
+    ctx.translate(W / 2, H / 2);
+    ctx.scale(zoom, zoom);
+    ctx.translate(-focusX, -focusY);
+
+    const waterY = GROUND_Y - 4;
+
+    // === ФОН ===
+    // В первой фазе ещё видна обычная игра (берег), потом всё переходит к подводному
+    let onLandT;
+    if (t < 0.40) onLandT = 1; // на земле
+    else if (t < 0.55) onLandT = 1 - ease((t - 0.40) / 0.15); // переход к воде
+    else onLandT = 0; // под водой
+
+    // Подводный синий
+    ctx.fillStyle = '#0a2040';
+    ctx.fillRect(focusX - W * 2, focusY - H * 2, W * 4, H * 4);
+    // Накладываем небо/землю с alpha = onLandT
+    if (onLandT > 0) {
+      ctx.fillStyle = 'rgba(184,224,255,' + onLandT + ')';
+      ctx.fillRect(focusX - W * 2, focusY - H * 2, W * 4, waterY - (focusY - H * 2));
+      ctx.fillStyle = 'rgba(138,106,58,' + onLandT + ')';
+      ctx.fillRect(focusX - W * 2, GROUND_Y - 2, W * 4, H * 2);
+      ctx.fillStyle = 'rgba(212,168,136,' + onLandT + ')';
+      ctx.fillRect(focusX - W * 2, GROUND_Y - 2, W * 4, 2);
+    }
+    // Небо над водой - всегда
+    if (onLandT < 1) {
+      // Линия поверхности воды
+      ctx.fillStyle = 'rgba(64,128,192,' + (1 - onLandT) + ')';
+      ctx.fillRect(focusX - W * 2, waterY, W * 4, 3);
+      // Лучи света через поверхность
+      const lightAlpha = 0.20 * (1 - onLandT);
+      ctx.fillStyle = 'rgba(180,220,255,' + lightAlpha + ')';
+      const lightOff = (outroTimer * 0.2) % 30;
+      for (let i = -10; i < 10; i++) {
+        const lx = focusXEnd + i * 30 + lightOff;
+        ctx.fillRect(lx, waterY + 4, 2, 200);
+      }
+    }
+    // Облака и небо над водой когда мы под водой
+    if (t > 0.55) {
+      ctx.fillStyle = '#b8e0ff';
+      ctx.fillRect(focusX - W * 2, focusY - H * 2, W * 4, waterY - (focusY - H * 2));
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      const cloudOff = (outroTimer * 0.1) % 180;
+      for (let i = -3; i < 4; i++) {
+        const cx = focusXEnd + i * 180 + cloudOff;
+        const cy = waterY - 80 - (i % 2) * 30;
+        ctx.fillRect(cx, cy, 30, 8);
+        ctx.fillRect(cx + 6, cy - 4, 18, 4);
+      }
+    }
+
+    // === ПУЗЫРИ - в фазе погружения ===
+    if (t > 0.40) {
+      const bubbleAlpha = Math.min(1, (t - 0.40) / 0.10);
+      for (const bb of introBubbles) {
+        const bx = focusXEnd + (bb.x - W / 2) * 0.5;
+        const by = waterY + 5 + ((bb.y % 200) / 200) * 145;
+        ctx.strokeStyle = 'rgba(220,240,255,' + (0.7 * bubbleAlpha) + ')';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(bx, by, bb.sz, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(180,220,255,' + (0.25 * bubbleAlpha) + ')';
+        ctx.beginPath();
+        ctx.arc(bx, by, Math.max(0.5, bb.sz - 0.5), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,' + (0.9 * bubbleAlpha) + ')';
+        ctx.fillRect(bx - 1, by - 1, 1, 1);
+      }
+    }
+
+    // === ПЕРСОНАЖ ===
+    if (t < 0.20) {
+      // Ящерица в обычной позиции, камера зумится к ней
+      drawLizard();
+    } else if (t < 0.40) {
+      // Трансформация ящерица → рыба (обратное превращение)
+      const morphT = ease((t - 0.20) / 0.20);
+      // morphT идёт от 0 (ящерица) до 1 (рыба) - используем drawIntroFishToLizard с инвертированным t
+      const fx = focusXEnd;
+      const fy = GROUND_Y - 8;
+      drawIntroFishToLizard(fx, fy, 1 - morphT);
+    } else if (t < 0.55) {
+      // Рыба прыгает в воду
+      const jumpT = ease((t - 0.40) / 0.15);
+      const sx = focusXEnd, sy = GROUND_Y - 8;
+      const ex = focusXEnd - 12, ey = waterY + 8;
+      const linX = sx + (ex - sx) * jumpT;
+      const linY = sy + (ey - sy) * jumpT;
+      const arc = -Math.sin(jumpT * Math.PI) * 25;
+      const fishX = linX;
+      const fishY = linY + arc;
+      const rotation = Math.PI * 0.35 - jumpT * Math.PI * 0.7; // переворачивается носом вниз
+      drawIntroFish(fishX, fishY, true, rotation);
+      // Брызги при входе в воду в конце прыжка
+      if (jumpT > 0.85) {
+        const splashT = (jumpT - 0.85) / 0.15;
+        ctx.fillStyle = 'rgba(180,220,255,' + (0.9 * (1 - splashT)) + ')';
+        for (let i = 0; i < 8; i++) {
+          const ang = -Math.PI / 2 - 0.7 + (i / 8) * 1.4;
+          const dist = splashT * 50;
+          ctx.fillRect(ex + Math.cos(ang) * dist, waterY + Math.sin(ang) * dist - 2, 2, 2);
+        }
+      }
+    } else if (t < 0.85) {
+      // Рыба погружается и плавает на глубину
+      const swimT = ease((t - 0.55) / 0.30);
+      const sx = focusXEnd - 12, sy = waterY + 8;
+      // Плывёт вглубь и в сторону
+      const ex = focusXEnd - 32, ey = focusYEnd + 5;
+      const baseX = sx + (ex - sx) * swimT;
+      const baseY = sy + (ey - sy) * swimT;
+      const wobbleAmp = swimT;
+      const fishX = baseX + Math.sin(outroTimer * 0.10) * 6 * wobbleAmp;
+      const fishY = baseY + Math.sin(outroTimer * 0.08) * 3 * wobbleAmp;
+      const wag = Math.sin(outroTimer * 0.10) * 0.10;
+      drawIntroFish(fishX, fishY, false, wag);
+    } else {
+      // Рыба плавает спокойно в глубине - финальная позиция
+      const fishX = focusXEnd - 32 + Math.sin(outroTimer * 0.02) * 12;
+      const fishY = focusYEnd + 5 + Math.sin(outroTimer * 0.04) * 5;
+      const wag = Math.sin(outroTimer * 0.08) * 0.08;
+      drawIntroFish(fishX, fishY, false, wag);
+    }
+
+    ctx.restore();
+
+    // === ТЕКСТ - появляется в самом конце и держится ===
+    if (t > 0.80) {
+      const textAlpha = Math.min(1, (t - 0.80) / 0.15);
+      ctx.save();
+      ctx.font = 'bold 36px "Courier New", monospace';
+      ctx.textAlign = 'center';
+      // Тень
+      ctx.fillStyle = 'rgba(0,40,80,' + (0.7 * textAlpha) + ')';
+      ctx.fillText('Congratulations!', W / 2 + 2, 80 + 2);
+      // Градиент морской волны
+      const titleGrd = ctx.createLinearGradient(0, 50, 0, 90);
+      titleGrd.addColorStop(0, '#ffe080');
+      titleGrd.addColorStop(0.5, '#ffa040');
+      titleGrd.addColorStop(1, '#a04020');
+      ctx.fillStyle = titleGrd;
+      ctx.globalAlpha = textAlpha;
+      ctx.fillText('Congratulations!', W / 2, 80);
+      // Контур
+      ctx.strokeStyle = '#0a2040';
+      ctx.lineWidth = 2;
+      ctx.strokeText('Congratulations!', W / 2, 80);
+      // Подзаголовок - в две строки
+      ctx.font = '18px "Courier New", monospace';
+      ctx.fillStyle = '#fff';
+      ctx.globalAlpha = textAlpha;
+      ctx.fillText('After all your struggles,', W / 2, 120);
+      ctx.fillText('you ended up right where you started.', W / 2, 145);
+      ctx.restore();
+      ctx.textAlign = 'left';
+    }
   }
 
   function drawGameOver() {
@@ -5409,6 +6513,21 @@ document.addEventListener('click', lockOrientation, { once: true });
   }
 
   function render() {
+    // DPR-аware: рисуем в логических координатах, физический canvas в DPR раз плотнее
+    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) ? window.devicePixelRatio : 1;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // Отключаем сглаживание для чётких пиксельных спрайтов
+    ctx.imageSmoothingEnabled = false;
+    // На стартовом экране показываем только воду с рыбой и заголовком
+    if (state === STATE.READY) {
+      drawReady();
+      return;
+    }
+    // На финальном экране - анимация погружения и Congratulations
+    if (state === STATE.OUTRO) {
+      drawOutro();
+      return;
+    }
     drawSky();
     drawTopVignette();
     drawStars();
@@ -5482,15 +6601,96 @@ document.addEventListener('click', lockOrientation, { once: true });
     for (const p of poops) drawPoop(p);
     for (const d of dust) drawDust(d);
     drawDino();
+    // Газеты в лицо рисуются поверх героя
+    for (const np of newspapers) drawNewspaper(np);
     for (const bf of butterflies) drawButterfly(bf);
     for (const b of bolts) drawBolt(b);
     drawScore();
-    if (state === STATE.READY) drawReady();
+    if (state === STATE.INTRO) drawIntro();
     if (state === STATE.OVER) drawGameOver();
   }
 
+  function updateIntro() {
+    introTimer--;
+    // Спавн пузырьков (часто в начале, реже к концу)
+    const t = 1 - introTimer / INTRO_LEN;
+    const bubbleRate = t < 0.5 ? 3 : 8;
+    if (introTimer % bubbleRate === 0) {
+      introBubbles.push({
+        x: Math.random() * W,
+        y: H - Math.random() * 100,
+        vy: -0.5 - Math.random() * 1,
+        sz: 1 + Math.random() * 3,
+        life: 100 + Math.random() * 60
+      });
+    }
+    for (const bb of introBubbles) {
+      bb.y += bb.vy;
+      bb.x += Math.sin(introTimer * 0.1 + bb.sz) * 0.3;
+      bb.life--;
+    }
+    for (let i = introBubbles.length - 1; i >= 0; i--) {
+      if (introBubbles[i].life <= 0 || introBubbles[i].y < -10) introBubbles.splice(i, 1);
+    }
+    if (introTimer <= 0) {
+      introBubbles.length = 0;
+      startRun();
+    }
+  }
+
+  function updateOutro() {
+    if (outroTimer > 0) outroTimer--;
+    // Спавняем пузырьки в фазе погружения
+    const t = 1 - outroTimer / OUTRO_LEN;
+    if (t > 0.4 && outroTimer % 4 === 0) {
+      introBubbles.push({
+        x: Math.random() * W,
+        y: H - Math.random() * 100,
+        vy: -0.5 - Math.random() * 1,
+        sz: 1 + Math.random() * 3,
+        life: 100 + Math.random() * 60
+      });
+    }
+    for (const bb of introBubbles) {
+      bb.y += bb.vy;
+      bb.x += Math.sin(outroTimer * 0.1 + bb.sz) * 0.3;
+      bb.life--;
+    }
+    for (let i = introBubbles.length - 1; i >= 0; i--) {
+      if (introBubbles[i].life <= 0 || introBubbles[i].y < -10) introBubbles.splice(i, 1);
+    }
+    // outroTimer стопится на 0 - финальный экран показывается до нажатия
+  }
+
   function loop() {
-    update();
+    if (state === STATE.INTRO) {
+      updateIntro();
+    } else if (state === STATE.OUTRO) {
+      updateOutro();
+    } else if (state === STATE.READY) {
+      // Анимация READY-экрана: рыба плавает, пузыри
+      frameCount++;
+      // Спавним пузыри так же как в intro
+      if (frameCount % 3 === 0) {
+        introBubbles.push({
+          x: Math.random() * W,
+          y: H - Math.random() * 100,
+          vy: -0.5 - Math.random() * 1,
+          sz: 1 + Math.random() * 3,
+          life: 100 + Math.random() * 60
+        });
+      }
+      for (const bb of introBubbles) {
+        bb.y += bb.vy;
+        bb.x += Math.sin(frameCount * 0.1 + bb.sz) * 0.3;
+        bb.life--;
+      }
+      for (let i = introBubbles.length - 1; i >= 0; i--) {
+        if (introBubbles[i].life <= 0 || introBubbles[i].y < -10) introBubbles.splice(i, 1);
+      }
+    } else {
+      update();
+    }
     render();
     requestAnimationFrame(loop);
   }

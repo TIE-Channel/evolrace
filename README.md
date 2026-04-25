@@ -1,4 +1,4 @@
-# Упаковка игры Dino Game в мобильные приложения
+# Упаковка игры Evolrace в мобильные приложения
 
 Игра написана на HTML5+Canvas, поэтому быстрее всего обернуть её через **Capacitor** в нативные приложения для Android (APK/AAB) и iOS (IPA).
 
@@ -18,22 +18,22 @@
 ## Шаг 1 - Подготовка проекта
 
 ```bash
-mkdir dino-game-app
-cd dino-game-app
+mkdir evolrace-app
+cd evolrace-app
 npm init -y
 npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/ios
-npx cap init "Dino Game" "com.kondrashova.dinogame" --web-dir=www
+npx cap init "Evolrace" "com.kondrashova.evolrace" --web-dir=www
 mkdir www
 ```
 
-Скопируйте `dino-game.html` в `www/index.html`.
+Скопируйте `index.html` в `www/index.html`.
 
 ## Шаг 2 - Конфигурация capacitor.config.json
 
 ```json
 {
-  "appId": "com.kondrashova.dinogame",
-  "appName": "Dino Rhythm Quest",
+  "appId": "com.kondrashova.evolrace",
+  "appName": "Evolrace",
   "webDir": "www",
   "server": {
     "androidScheme": "https"
@@ -59,12 +59,12 @@ npx cap open android
 ```
 
 В Android Studio:
-1. Build → Generate Signed Bundle/APK → APK
+1. Build -> Generate Signed Bundle/APK -> APK
 2. Создайте keystore (хранить в безопасном месте, потерять = потерять доступ к обновлениям)
-3. Build APK → файл будет в `android/app/release/app-release.apk`
+3. Build APK -> файл будет в `android/app/release/app-release.apk`
 
 Для Google Play нужен **AAB** (Android App Bundle):
-- Build → Generate Signed Bundle/APK → Android App Bundle
+- Build -> Generate Signed Bundle/APK -> Android App Bundle
 
 ## Шаг 4 - Сборка iOS (только на Mac)
 
@@ -77,69 +77,35 @@ npx cap open ios
 В Xcode:
 1. Выбрать team (ваш Apple Developer)
 2. Указать Bundle Identifier совпадающий с appId
-3. Product → Archive
-4. Distribute App → App Store Connect
+3. Product -> Archive
+4. Distribute App -> App Store Connect
 
-## Шаг 5 - Подготовка к публикации
-
-**Иконки и сплэш-экран** - используйте инструмент `@capacitor/assets`:
-
-```bash
-npm install @capacitor/assets --save-dev
-mkdir assets
-# Положите icon.png (1024x1024) и splash.png (2732x2732) в assets/
-npx capacitor-assets generate
-```
-
-**Скриншоты для магазинов** (минимум по 3 на устройство):
-- Android: 1080x1920 или выше
-- iOS: для iPhone 6.7", 6.5", 5.5"
-
-## Шаг 6 - Публикация
+## Шаг 5 - Публикация
 
 **Google Play:**
 1. https://play.google.com/console
-2. Create app → загрузить AAB
+2. Create app -> загрузить AAB
 3. Заполнить описание, скриншоты, иконку, политику приватности
 4. Privacy Policy URL обязателен (можно сделать на GitHub Pages бесплатно)
-5. Content rating questionnaire
-6. Pricing & distribution
-7. Submit for review (1-3 дня)
+5. Submit for review (1-3 дня)
 
 **App Store:**
 1. https://appstoreconnect.apple.com
-2. My Apps → New App
-3. Upload через Xcode (Archive → Distribute)
+2. My Apps -> New App
+3. Upload через Xcode (Archive -> Distribute)
 4. Заполнить метаданные, скриншоты
 5. Submit for Review (1-7 дней)
 
-## Важные моменты
+## Альтернатива - PWABuilder (самый простой путь)
 
-- **Music auto-play**: на мобильных браузерах автозапуск аудио блокируется. Игра уже содержит обработчик первого тапа для запуска `audioCtx.resume()`.
-- **Полный экран**: Capacitor обеспечит полноэкранный режим автоматически.
-- **Ориентация**: для портретного режима добавьте в Capacitor config `orientation: "portrait"`.
-- **Ввод**: Capacitor преобразует тапы в `mousedown` события - игра уже их обрабатывает.
-
-## Альтернатива - PWA на itch.io
-
-Если процесс Google Play / App Store кажется слишком сложным, можно опубликовать как **PWA на itch.io**:
-1. Зарегистрируйтесь на https://itch.io
-2. Загрузите `dino-game.html` как HTML-игру
-3. Сразу доступна всем, без модерации
-
-## Альтернатива - PWABuilder
-
-Проще автоматизированный путь через **PWABuilder** (Microsoft):
 1. https://www.pwabuilder.com
-2. Введите URL вашего PWA (нужен manifest.json и service worker)
+2. Введите URL вашего PWA (например с GitHub Pages)
 3. Сгенерирует APK и iOS-проект автоматически
 
-## Юридические моменты
-
-**Privacy Policy** обязательна для обоих магазинов. Простой шаблон:
+## Privacy Policy
 
 ```
-Privacy Policy for Dino Rhythm Quest
+Privacy Policy for Evolrace
 
 This app does not collect any personal data.
 The app does not use any third-party analytics.
@@ -148,7 +114,5 @@ The app stores game progress (high score) only on the device.
 
 Contact: kondrashova@example.com
 ```
-
-**Лицензия Fatboy Slim** - "Right Here Right Now" это синтезированный голос а не оригинальный сэмпл, поэтому формально нарушения копирайта нет. Но для безопасности можно изменить произносимую фразу на свою оригинальную.
 
 **Возрастной рейтинг**: игра содержит мультяшное насилие (босс-файты), скелеты, соответствует ESRB Everyone 10+ / PEGI 7.
