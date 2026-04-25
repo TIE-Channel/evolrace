@@ -23,32 +23,20 @@
   .wrap {
     position: fixed;
     inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #000;
   }
   canvas {
     display: block;
-    width: 100vw;
-    height: 100vh;
     background: #b8e0ff;
-  }
-  .hint {
-    position: absolute;
-    bottom: 8px;
-    left: 50%;
-    transform: translateX(-50%);
-    color: #fff;
-    font-size: 12px;
-    letter-spacing: 1px;
-    background: rgba(0,0,0,0.5);
-    padding: 6px 12px;
-    border-radius: 4px;
-    pointer-events: none;
   }
 </style>
 </head>
 <body>
 <div class="wrap">
   <canvas id="game"></canvas>
-  <div class="hint">Пробел - прыжок/двойной/спешиться | Вниз - пригнуться | Стрелки - единорог | R - рестарт</div>
 </div>
 
 <script>
@@ -58,8 +46,11 @@
 
   // Размер канваса = размер окна. Игровое поле тянется во все стороны без растягивания спрайтов.
   function resizeCanvas() {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
+    const winW = window.innerWidth;
+    const winH = window.innerHeight;
+    canvas.width = winW;
+    // Если экран вертикальный - ограничиваем высоту шириной (получится квадрат)
+    canvas.height = Math.min(winH, winW);
     W = canvas.width;
     H = canvas.height;
     // Линия земли по центру экрана - всё действие идёт по середине высоты
@@ -5387,8 +5378,6 @@
     ctx.font = 'bold 24px "Courier New", monospace';
     ctx.textAlign = 'center';
     ctx.fillText('G A M E   O V E R', W / 2, H / 2 - 10);
-    ctx.font = '14px "Courier New", monospace';
-    ctx.fillText('Пробел или R - снова', W / 2, H / 2 + 15);
     ctx.textAlign = 'left';
   }
 
@@ -5497,7 +5486,6 @@ if ('serviceWorker' in navigator) {
   canvas.addEventListener('touchstart', (e) => {
     e.preventDefault();
     touchStartY = e.touches[0].clientY;
-    // Симулируем нажатие пробела
     const ev = new KeyboardEvent('keydown', { code: 'Space', key: ' ', bubbles: true });
     document.dispatchEvent(ev);
   }, { passive: false });
@@ -5514,7 +5502,6 @@ if ('serviceWorker' in navigator) {
     const ev = new KeyboardEvent('keyup', { code: 'ArrowDown', key: 'ArrowDown', bubbles: true });
     document.dispatchEvent(ev);
   }, { passive: false });
-  // Запрет масштабирования двойным тапом
   let lastTap = 0;
   document.addEventListener('touchend', (e) => {
     const now = Date.now();
