@@ -5919,7 +5919,7 @@ document.addEventListener('click', lockOrientation, { once: true });
     // Стартовый экран = ровно та же сцена что в фазе 1 intro
     // Камера: фокус на focusXStart, focusYStart, зум 4.5
     const focusXStart = DINO_X + 22;
-    const focusYStart = GROUND_Y + 30;
+    const focusYStart = GROUND_Y - 4; // фокус на поверхности воды - линия воды по центру экрана
     const zoom = 4.5;
     const tt = frameCount;
     const waterY = GROUND_Y - 4;
@@ -5986,8 +5986,9 @@ document.addEventListener('click', lockOrientation, { once: true });
     }
 
     // Рыба плавает в воде - бумерангом туда-сюда (зацикленное движение)
+    // Под поверхностью воды (focusY = waterY, рыба на 30 пикселей ниже)
     readyFishX = focusXStart - 32 + Math.sin(tt * 0.02) * 12;
-    readyFishY = focusYStart + 5 + Math.sin(tt * 0.04) * 5;
+    readyFishY = focusYStart + 30 + Math.sin(tt * 0.04) * 5;
     const wag = Math.sin(tt * 0.08) * 0.08;
     drawIntroFish(readyFishX, readyFishY, false, wag);
 
@@ -6031,7 +6032,7 @@ document.addEventListener('click', lockOrientation, { once: true });
     // Точка фокуса камеры
     // В подводной фазе focusY ниже линии воды - сверху видно небо, снизу вода с рыбой
     const focusXStart = DINO_X + 22;
-    const focusYStart = GROUND_Y + 30; // ниже воды чтобы поверхность была в верхней трети
+    const focusYStart = GROUND_Y - 4; // фокус на поверхности воды - линия воды по центру экрана
     const focusXEnd = W / 2;
     const focusYEnd = H / 2;
 
@@ -6155,7 +6156,7 @@ document.addEventListener('click', lockOrientation, { once: true });
       // Фаза 1: плывёт под водой (на READY-экране показывается зацикленно, при старте сразу пропускаем)
       const swim1T = ease(t / 0.30);
       const baseX = (focusXStart - 32) + swim1T * 14;
-      const baseY = focusYStart + 5;
+      const baseY = focusYStart + 30;
       const wobbleAmp = 1 - swim1T * 0.7;
       const fishX = baseX + Math.sin(introTimer * 0.02) * 12 * wobbleAmp;
       const fishY = baseY + Math.sin(introTimer * 0.04) * 5 * wobbleAmp;
@@ -6166,7 +6167,7 @@ document.addEventListener('click', lockOrientation, { once: true });
       // Старт берём из позиции рыбы на READY-экране (плавный переход без рывка)
       const swim2T = ease((t - 0.30) / 0.12);
       const sx = readyFishX || (focusXStart - 18);
-      const sy = readyFishY || (focusYStart + 5);
+      const sy = readyFishY || (focusYStart + 30);
       const ex = focusXStart - 12, ey = waterY + 8;
       const baseX = sx + (ex - sx) * swim2T;
       const baseY = sy + (ey - sy) * swim2T;
