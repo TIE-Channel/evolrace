@@ -105,19 +105,16 @@ jobs:
             convert icon-512.png -resize ${size}x${size} \
               android/app/src/main/res/mipmap-$density/ic_launcher_round.png
 
-            # Adaptive icon foreground - 108x108dp с safe zone 66x66dp
-            # Размещаем иконку 66/108 = ~61% от размера в центре, остальное прозрачное
-            adaptive_full=$((size * 108 / 48))   # полный размер adaptive (108dp)
-            adaptive_safe=$((size * 66 / 48))    # safe zone (66dp)
+            # Adaptive icon foreground - заполняем весь 108x108dp полностью
+            # БЕЗ прозрачной рамки (если устройство применит круглую маску - углы обрежутся,
+            # но это лучше чем видимая рамка)
+            adaptive_full=$((size * 108 / 48))
 
             convert icon-512.png \
-              -resize ${adaptive_safe}x${adaptive_safe} \
-              -background none \
-              -gravity center \
-              -extent ${adaptive_full}x${adaptive_full} \
+              -resize ${adaptive_full}x${adaptive_full} \
               android/app/src/main/res/mipmap-$density/ic_launcher_foreground.png
 
-            echo "Generated icons for $density (${size}x${size}, adaptive ${adaptive_full}x${adaptive_full} with safe ${adaptive_safe}x${adaptive_safe})"
+            echo "Generated icons for $density (${size}x${size}, adaptive ${adaptive_full}x${adaptive_full} - full fill)"
           done
 
           # Adaptive icon XML для Android 8+
