@@ -8672,12 +8672,13 @@ document.addEventListener('click', lockOrientation, { once: true });
   Remove Ads $1.99
 </button>
 
-<!-- Декоративная рамка вокруг banner рекламы внизу -->
-<!-- Native AdMob banner рисуется поверх WebView, эта рамка чуть больше его и видна по краям -->
-<div id="ad-banner-frame" style="display:none;position:fixed;bottom:4px;left:50%;transform:translateX(-50%);
-  width:336px;height:66px;border:2px solid #1060a0;border-radius:8px;
-  background:linear-gradient(to bottom, rgba(16,96,160,0.15), rgba(16,96,160,0.35));
-  box-shadow:0 -2px 8px rgba(0,0,0,0.2), inset 0 0 0 1px rgba(255,255,255,0.4);
+<!-- Декоративная рамка вокруг banner -->
+<!-- div точно того же размера что banner (320x50). Banner native view закрывает div.
+     Рамка создаётся через box-shadow со spread - она выходит за пределы div и видна
+     по периметру за пределами native banner. Без прозрачности. -->
+<div id="ad-banner-frame" style="display:none;position:fixed;bottom:8px;left:50%;transform:translateX(-50%);
+  width:320px;height:50px;background:#1060a0;border-radius:4px;
+  box-shadow:0 0 0 3px #1060a0, 0 4px 8px rgba(0,0,0,0.5);
   z-index:999;pointer-events:none;"></div>
 
 <!-- Уведомление "Спасибо за покупку" -->
@@ -8700,7 +8701,7 @@ document.addEventListener('click', lockOrientation, { once: true });
   'use strict';
 
   // === НАСТРОЙКИ ===
-  const SHOW_INTERSTITIAL_EVERY_N_DEATHS = 3;
+  // Логика interstitial реклам теперь основана на длительности забега, не на счётчике смертей
 
   // === AdMob Ad IDs ===
   // ВАЖНО: тестовые ID работают всегда, продакшен ID нужно получить в AdMob Console
@@ -8721,10 +8722,9 @@ document.addEventListener('click', lockOrientation, { once: true });
 
   // === СОСТОЯНИЕ ===
   let adsRemoved = localStorage.getItem('evolrace_ads_removed') === '1';
-  let lastGameState = null;
-  let gameOverCount = 0;
   let bannerShown = false;
   let isCapacitor = false;
+  let lastGameState = null;
 
   const removeAdsBtn = document.getElementById('remove-ads-btn');
   const purchaseThanks = document.getElementById('purchase-thanks');
@@ -8851,33 +8851,34 @@ document.addEventListener('click', lockOrientation, { once: true });
     try {
       const { AdMob } = window.Capacitor.Plugins;
 
-      // Если ещё не загружен - запросим и подождём до 5 сек
+      // Если ещё не загружен - запросим и подождём до 10 сек
       if (!interstitialLoaded) {
         console.log('[Ads] Interstitial not loaded yet, requesting...');
         prepareInterstitial();
 
         let waitedMs = 0;
         const stepMs = 200;
-        const maxWaitMs = 5000;
+        const maxWaitMs = 10000;  // 10 секунд - даём больше времени на загрузку
         while (!interstitialLoaded && waitedMs < maxWaitMs) {
           await new Promise(resolve => setTimeout(resolve, stepMs));
           waitedMs += stepMs;
         }
 
         if (!interstitialLoaded) {
-          console.warn('[Ads] Interstitial timeout after', maxWaitMs, 'ms');
+          console.warn('[Ads] Interstitial timeout after', maxWaitMs, 'ms - skipping');
+          // Готовим следующий чтобы был к следующему показу
+          setTimeout(prepareInterstitial, 1000);
           return;
         }
       }
 
       console.log('[Ads] Showing interstitial');
       await AdMob.showInterstitial();
-      interstitialLoaded = false; // после показа нужно prepare заново (это сделает event dismissed)
+      interstitialLoaded = false; // после показа нужно prepare заново
     } catch (e) {
       console.warn('[Ads] showInterstitial error:', e);
       interstitialLoaded = false;
-      // Готовим следующий через 5 сек
-      setTimeout(prepareInterstitial, 5000);
+      setTimeout(prepareInterstitial, 2000);
     }
   }
 
@@ -8954,6 +8955,16 @@ document.addEventListener('click', lockOrientation, { once: true });
 
   removeAdsBtn.addEventListener('click', purchaseRemoveAds);
 
+  // Умная логика interstitial:
+  // - Короткий забег (<15 сек) - НЕ показываем (быстрый рестарт без раздражения)
+  // - Длинный забег (>=15 сек) - ПОКАЗЫВАЕМ (естественная пауза для рекламы)
+  // - Минимальная пауза между показами 30 сек (соблюдаем AdMob best practice)
+  const MIN_RUN_DURATION_FOR_AD_SEC = 15;
+  const MIN_TIME_BETWEEN_ADS_SEC = 30;
+
+  let runStartTime = 0;
+  let lastInterstitialShownAt = 0;
+
   // === POLLING СОСТОЯНИЯ ИГРЫ ===
   function checkGameState() {
     if (!window._evolrace || !window._evolrace.STATE) return;
@@ -8961,11 +8972,32 @@ document.addEventListener('click', lockOrientation, { once: true });
     const currentState = window._evolrace.getState();
 
     if (currentState !== lastGameState) {
+      // Запоминаем время когда начался забег (RUN)
+      if (currentState === STATE.RUN) {
+        runStartTime = Date.now();
+      }
+
       // Game Over (с RUN на OVER)
       if (currentState === STATE.OVER && lastGameState === STATE.RUN) {
-        gameOverCount++;
-        if (!adsRemoved && gameOverCount % SHOW_INTERSTITIAL_EVERY_N_DEATHS === 0) {
-          setTimeout(showInterstitialAd, 1500);
+        if (!adsRemoved) {
+          const runDurationSec = (Date.now() - runStartTime) / 1000;
+          const timeSinceLastAdSec = (Date.now() - lastInterstitialShownAt) / 1000;
+
+          console.log('[Ads] Run duration:', runDurationSec.toFixed(1), 'sec, since last ad:', timeSinceLastAdSec.toFixed(1), 'sec');
+
+          // Показываем только если:
+          // 1. Забег был достаточно долгим (>= 15 сек)
+          // 2. С прошлой рекламы прошло >= 30 сек
+          if (runDurationSec >= MIN_RUN_DURATION_FOR_AD_SEC &&
+              timeSinceLastAdSec >= MIN_TIME_BETWEEN_ADS_SEC) {
+            console.log('[Ads] Showing interstitial after long run');
+            lastInterstitialShownAt = Date.now();
+            setTimeout(showInterstitialAd, 1500);
+          } else {
+            const reason = runDurationSec < MIN_RUN_DURATION_FOR_AD_SEC
+              ? 'short run' : 'too soon after last ad';
+            console.log('[Ads] Skipping interstitial:', reason);
+          }
         }
       }
 
