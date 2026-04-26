@@ -94,12 +94,17 @@ document.addEventListener('click', lockOrientation, { once: true });
     W = winW;
     H = winH;
     const oldGroundY = GROUND_Y;
-    GROUND_Y = Math.floor(H / 2) + 80;
+    GROUND_Y = Math.floor(H / 2) + 50;
+    HORIZON_Y = Math.floor(H / 2);  // горизонт по центру экрана
     DINO_X = Math.max(120, Math.floor(W * 0.32));
     // Обновляем позиции объектов которые привязаны к земле
     try {
       if (dino) {
         dino.homeX = DINO_X;
+        // Обновляем x когда dino не привязан к платформе/единорогу - чтобы он не оказался "позади"
+        if (!dino.riding && !dino.onPlatform) {
+          dino.x = DINO_X;
+        }
         // Если dino стоит на земле (или ещё не двигался) - обновляем y
         if (dino.onGround || dino.vy === 0) {
           dino.y = GROUND_Y - dino.h;
@@ -113,6 +118,7 @@ document.addEventListener('click', lockOrientation, { once: true });
   let W = 800;
   let H = 220;
   let GROUND_Y;
+  let HORIZON_Y;
   let DINO_X;
   resizeCanvas();
   if (window.addEventListener) {
@@ -291,16 +297,16 @@ document.addEventListener('click', lockOrientation, { once: true });
 
   // 10 разных типов боссов
   const BOSS_TYPES = [
-    { id: 'dragon',     w: 90, h: 80, color: '#b01830', light: '#e03050', dark: '#600818' },
-    { id: 'yeti',       w: 80, h: 85, color: '#d8e8f0', light: '#ffffff', dark: '#6080a0' },
-    { id: 'cyclops',    w: 75, h: 90, color: '#c8a040', light: '#e4c870', dark: '#6a5020' },
-    { id: 'spider',     w: 95, h: 65, color: '#4a2070', light: '#7040a0', dark: '#1e0830' },
-    { id: 'minotaur',   w: 85, h: 82, color: '#6a4020', light: '#946028', dark: '#2e1808' },
-    { id: 'lich',       w: 70, h: 90, color: '#b0b8c8', light: '#e0e8f0', dark: '#404858' },
-    { id: 'goblinking', w: 70, h: 70, color: '#3a7020', light: '#68a850', dark: '#1a3810' },
-    { id: 'flame',      w: 78, h: 88, color: '#e04020', light: '#ffb040', dark: '#802010' },
-    { id: 'ice',        w: 85, h: 92, color: '#7fc8e8', light: '#b8e4f8', dark: '#2a5070' },
-    { id: 'shadow',     w: 78, h: 80, color: '#281838', light: '#502858', dark: '#080010' }
+    { id: 'dragon',     w: 108, h: 96,  color: '#b01830', light: '#e03050', dark: '#600818' },
+    { id: 'yeti',       w: 96,  h: 102, color: '#d8e8f0', light: '#ffffff', dark: '#6080a0' },
+    { id: 'cyclops',    w: 90,  h: 108, color: '#c8a040', light: '#e4c870', dark: '#6a5020' },
+    { id: 'spider',     w: 114, h: 78,  color: '#4a2070', light: '#7040a0', dark: '#1e0830' },
+    { id: 'minotaur',   w: 102, h: 98,  color: '#6a4020', light: '#946028', dark: '#2e1808' },
+    { id: 'lich',       w: 84,  h: 108, color: '#b0b8c8', light: '#e0e8f0', dark: '#404858' },
+    { id: 'goblinking', w: 84,  h: 84,  color: '#3a7020', light: '#68a850', dark: '#1a3810' },
+    { id: 'flame',      w: 94,  h: 106, color: '#e04020', light: '#ffb040', dark: '#802010' },
+    { id: 'ice',        w: 102, h: 110, color: '#7fc8e8', light: '#b8e4f8', dark: '#2a5070' },
+    { id: 'shadow',     w: 94,  h: 96,  color: '#281838', light: '#502858', dark: '#080010' }
   ];
 
   let activeBoss = null;
@@ -313,8 +319,10 @@ document.addEventListener('click', lockOrientation, { once: true });
   let introTimer = 0;
   let outroTimer = 0;
   let outroPendingTimer = 0; // таймер 19-го финального уровня без босса
+  let cheatBossTimer = 0;    // таймер для спавна босса после чит-кода (5 секунд)
+  let flatGroundTimer = 0;   // 5 сек ровной поверхности без препятствий в начале и конце
   const INTRO_LEN = 360;
-  const OUTRO_LEN = 360;
+  const OUTRO_LEN = 720;
   const introBubbles = [];
   // Позиция рыбы на READY-экране - используется как старт фазы 2 intro для плавного перехода
   let readyFishX = 0;
@@ -494,6 +502,9 @@ document.addEventListener('click', lockOrientation, { once: true });
   let cometCrashSignal = false;   // крэш (1/4такта) - огромные агрессивные
   const comets = [];
   const newspapers = [];
+  // Поезд на заднем плане - запускается при вокальном хуке
+  // Едет НАВСТРЕЧУ (справа налево как мир, но на дальнем плане)
+  let train = null; // {x, vx, cars}
   // Погода - постоянно цикличная: листья, дождь, снег, нет
   // Стартует с полной фазы 'none' (тишина), затем цикл leaves -> rain -> snow -> none
   const weather = { type: 'none', timer: 2250, particles: [] };
@@ -524,7 +535,31 @@ document.addEventListener('click', lockOrientation, { once: true });
     }
     // Холмистый рельеф (комбинация двух синусов)
     const wx = screenX + terrainOffset;
-    return GROUND_Y + Math.sin(wx * 0.005) * 10 + Math.sin(wx * 0.014) * 6;
+    const hilly = Math.sin(wx * 0.005) * 10 + Math.sin(wx * 0.014) * 6;
+    // flatGroundTimer:
+    //   В НАЧАЛЕ игры: 300 → 0
+    //     300..60  - ровно (flatness=1)
+    //     60..0    - плавный переход к холмам (1→0)
+    //   В КОНЦЕ перед outro: 360 → 0 (когда outroPendingTimer активен)
+    //     360..300 - плавный переход от холмов к ровно (0→1)
+    //     300..0   - ровно до outro (без обратного перехода!)
+    let flatness = 0;
+    if (flatGroundTimer > 0) {
+      if (flatGroundTimer > 300) {
+        // Конечный fade-in (только при подготовке к outro)
+        flatness = (360 - flatGroundTimer) / 60;
+      } else if (outroPendingTimer > 0) {
+        // Готовимся к outro - всегда ровно, без обратного перехода
+        flatness = 1;
+      } else if (flatGroundTimer > 60) {
+        flatness = 1;
+      } else {
+        // Начальный fade-out (только при старте игры)
+        flatness = flatGroundTimer / 60;
+      }
+    }
+    flatness = Math.max(0, Math.min(1, flatness));
+    return GROUND_Y + hilly * (1 - flatness);
   }
 
   function bgGroundHeight(screenX) {
@@ -595,6 +630,16 @@ document.addEventListener('click', lockOrientation, { once: true });
   let POWER_PATTERN = new Array(64).fill(0);
   POWER_PATTERN[16] = 1; POWER_PATTERN[24] = 1;
   POWER_PATTERN[48] = 1; POWER_PATTERN[56] = 1;
+  // Паттерн для ПТЕРОДАКТИЛЕЙ - длина 128 шагов
+  // Смещён на синкопу (полудолю) относительно power chord для интереснее ритма
+  // Spawn: 4, 36 (off-beat), Sound: 36, 68 (момент прыжка через bird1, bird2)
+  // POWER_PATTERN: 16, 24, 48, 56 (сильные доли) - птицы попадают между ними
+  let BIRD_PATTERN = new Array(128).fill(0);
+  BIRD_PATTERN[36] = 1;  // bird1 (spawned at 4) у dino - звук + прыжок
+  BIRD_PATTERN[68] = 1;  // bird2 (spawned at 36) у dino - звук + прыжок
+  const BIRD_SPAWN_POSITIONS = [4, 36];
+  // Очередь пригибаний (для птиц)
+  const pendingDucks = [];
 
   function mutateMusic() {
     // Случайно выбираем прогрессию и риф (по seed-у для детерминированной мутации)
@@ -849,6 +894,46 @@ document.addEventListener('click', lockOrientation, { once: true });
     for (const o of oscs) { o.start(t); o.stop(t + 0.4); }
   }
 
+  // Птеродактиль - splash cymbal (короткий высокий звон, отличается от crash)
+  function playBirdCall(t) {
+    if (!audioCtx) return;
+    // Короткий шумовой буфер
+    const noiseSize = audioCtx.sampleRate * 0.4;
+    const noiseBuf = audioCtx.createBuffer(1, noiseSize, audioCtx.sampleRate);
+    const noiseData = noiseBuf.getChannelData(0);
+    for (let i = 0; i < noiseSize; i++) noiseData[i] = Math.random() * 2 - 1;
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = noiseBuf;
+
+    // Bandpass на средне-высоких частотах с резонансом - как tight splash
+    const bp = audioCtx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 7500;
+    bp.Q.value = 3;
+
+    // Короткая огибающая - быстрая атака, более быстрый распад чем у crash
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.22, t + 0.003);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+
+    noise.connect(bp).connect(g).connect(masterOut);
+    noise.start(t);
+
+    // Высокий "звонкий" sine для тонального акцента (отличает от обычной crash)
+    const o = audioCtx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(3200, t);
+    o.frequency.exponentialRampToValueAtTime(2400, t + 0.2);
+    const og = audioCtx.createGain();
+    og.gain.setValueAtTime(0, t);
+    og.gain.linearRampToValueAtTime(0.08, t + 0.005);
+    og.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+    o.connect(og).connect(masterOut);
+    o.start(t);
+    o.stop(t + 0.35);
+  }
+
   function playClap(t) {
     if (!audioCtx) return;
     // Хлопки - три слоя шумовых импульсов из кэшированного буфера
@@ -977,6 +1062,11 @@ document.addEventListener('click', lockOrientation, { once: true });
       if (POWER_PATTERN[cyclePos]) {
         playPowerChord(t, rootFreq);
       }
+      // Птеродактиль - звук на BIRD_PATTERN (длина 128, 4 звука с шагом 32)
+      const cyclePos128 = step % 128;
+      if (BIRD_PATTERN[cyclePos128]) {
+        playBirdCall(t);
+      }
       // Лид-мелодия
       if (score > 300) {
         const leadNote = LEAD_RIFF[bar4][p];
@@ -1043,76 +1133,409 @@ document.addEventListener('click', lockOrientation, { once: true });
 
   // Вступительный амбиент - глубина океана, тихий гул, шум воды
   // Амбиент финальной сцены - "возвращение в океан"
+  // Бесконечная грустная амбиент-музыка с мутацией для outro
+  // Планирует следующий блок дронов и нот; вызывается каждый блок (~16 секунд)
+  let outroNextScheduleAt = 0;
+  let outroMelodyState = null;
+
+  // === МУТИРУЮЩАЯ FUNK МУЗЫКА ДЛЯ READY ЭКРАНА ===
+  // Бесконечный funk-цикл с мутацией басовой линии и гармонии
+  let readyNextScheduleAt = 0;
+  let readyMusicState = null;
+
+  // 4 басовых паттерна в Am (мутируют циклически)
+  const READY_FUNK_BASSES = [
+    // Паттерн 1: классический funk slap
+    [{f: 55, t: 0.0, d: 0.4}, {f: 55, t: 0.5, d: 0.2}, {f: 82.41, t: 0.75, d: 0.4}, {f: 55, t: 1.0, d: 0.3},
+     {f: 65.41, t: 1.5, d: 0.4}, {f: 55, t: 2.0, d: 0.2}, {f: 49, t: 2.25, d: 0.3}, {f: 55, t: 2.5, d: 0.5}],
+    // Паттерн 2: больше синкоп
+    [{f: 55, t: 0.0, d: 0.3}, {f: 73.42, t: 0.375, d: 0.25}, {f: 55, t: 0.75, d: 0.4}, {f: 82.41, t: 1.25, d: 0.4},
+     {f: 55, t: 1.75, d: 0.3}, {f: 87.31, t: 2.125, d: 0.4}, {f: 65.41, t: 2.625, d: 0.375}],
+    // Паттерн 3: октавные прыжки
+    [{f: 55, t: 0.0, d: 0.3}, {f: 110, t: 0.375, d: 0.2}, {f: 55, t: 0.625, d: 0.4}, {f: 65.41, t: 1.125, d: 0.3},
+     {f: 110, t: 1.5, d: 0.2}, {f: 65.41, t: 1.75, d: 0.4}, {f: 49, t: 2.25, d: 0.3}, {f: 55, t: 2.625, d: 0.375}],
+    // Паттерн 4: walking bass
+    [{f: 55, t: 0.0, d: 0.5}, {f: 65.41, t: 0.625, d: 0.5}, {f: 73.42, t: 1.25, d: 0.5}, {f: 82.41, t: 1.875, d: 0.5},
+     {f: 73.42, t: 2.5, d: 0.5}]
+  ];
+
+  // 4 аккорда для гитарных stabs (Am7, Dm7, G7, Cmaj7) - jazzy funk прогрессия
+  const READY_FUNK_CHORDS = [
+    [220, 261.63, 329.63, 392.00], // Am7: A, C, E, G
+    [293.66, 349.23, 440, 523.25], // Dm7: D, F, A, C
+    [196, 246.94, 293.66, 392.00], // G7:  G, B, D, F (G dom7)
+    [261.63, 329.63, 392.00, 493.88] // Cmaj7: C, E, G, B
+  ];
+
+  // Мелодические "хуки" - короткие фанковые фразы
+  const READY_FUNK_HOOKS = [
+    [{f: 440, t: 0.5, d: 0.3}, {f: 523.25, t: 0.875, d: 0.2}, {f: 659.25, t: 1.125, d: 0.5}],
+    [{f: 659.25, t: 0.5, d: 0.25}, {f: 587.33, t: 0.875, d: 0.25}, {f: 523.25, t: 1.25, d: 0.4}],
+    [{f: 392, t: 0.5, d: 0.3}, {f: 440, t: 0.875, d: 0.3}, {f: 523.25, t: 1.25, d: 0.4}],
+    [{f: 783.99, t: 0.5, d: 0.2}, {f: 659.25, t: 0.75, d: 0.2}, {f: 523.25, t: 1.0, d: 0.5}]
+  ];
+
+  function scheduleReadyBlock(t0) {
+    if (!audioCtx) return;
+    if (!readyMusicState) {
+      readyMusicState = { bassIdx: 0, chordIdx: 0, hookIdx: 0, blockCount: 0 };
+    }
+    const beat = 0.5; // 120 BPM
+    const dur = 3.0; // один блок = 3 сек = 6 долей = 1.5 такта (короткие циклы для мутации)
+
+    // Выбираем мутирующие элементы
+    const bass = READY_FUNK_BASSES[readyMusicState.bassIdx % READY_FUNK_BASSES.length];
+    const chord = READY_FUNK_CHORDS[readyMusicState.chordIdx % READY_FUNK_CHORDS.length];
+    const hook = READY_FUNK_HOOKS[readyMusicState.hookIdx % READY_FUNK_HOOKS.length];
+    readyMusicState.blockCount++;
+    // Мутации - басс меняется каждый блок, аккорд каждые 2, хук каждые 3
+    readyMusicState.bassIdx++;
+    if (readyMusicState.blockCount % 2 === 0) readyMusicState.chordIdx++;
+    if (readyMusicState.blockCount % 3 === 0) readyMusicState.hookIdx++;
+
+    // === FUNKY BASS LINE ===
+    for (const n of bass) {
+      const nt = t0 + n.t;
+      if (nt >= t0 + dur) break;
+      const o = audioCtx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(n.f * 1.005, nt);
+      o.frequency.exponentialRampToValueAtTime(n.f, nt + 0.05);
+      const lp = audioCtx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(450, nt);
+      lp.frequency.exponentialRampToValueAtTime(150, nt + n.d);
+      lp.Q.value = 6;
+      const g = audioCtx.createGain();
+      g.gain.setValueAtTime(0, nt);
+      g.gain.linearRampToValueAtTime(0.16, nt + 0.005);
+      g.gain.exponentialRampToValueAtTime(0.001, nt + n.d);
+      o.connect(lp).connect(g).connect(masterOut);
+      o.start(nt);
+      o.stop(nt + n.d + 0.05);
+    }
+
+    // === KICK на сильные доли (1 и 3) ===
+    const kickCount = Math.floor(dur / beat);
+    for (let b = 0; b < kickCount; b++) {
+      if (b % 2 !== 0) continue;
+      const kt = t0 + b * beat;
+      const kick = audioCtx.createOscillator();
+      kick.type = 'sine';
+      kick.frequency.setValueAtTime(110, kt);
+      kick.frequency.exponentialRampToValueAtTime(40, kt + 0.1);
+      const kickG = audioCtx.createGain();
+      kickG.gain.setValueAtTime(0, kt);
+      kickG.gain.linearRampToValueAtTime(0.20, kt + 0.005);
+      kickG.gain.exponentialRampToValueAtTime(0.001, kt + 0.18);
+      kick.connect(kickG).connect(masterOut);
+      kick.start(kt);
+      kick.stop(kt + 0.2);
+    }
+
+    // === SNARE на 2 и 4 ===
+    for (let b = 1; b < kickCount; b += 2) {
+      const st = t0 + b * beat;
+      const sTone = audioCtx.createOscillator();
+      sTone.type = 'triangle';
+      sTone.frequency.setValueAtTime(220, st);
+      sTone.frequency.exponentialRampToValueAtTime(180, st + 0.05);
+      const sToneG = audioCtx.createGain();
+      sToneG.gain.setValueAtTime(0, st);
+      sToneG.gain.linearRampToValueAtTime(0.08, st + 0.003);
+      sToneG.gain.exponentialRampToValueAtTime(0.001, st + 0.1);
+      sTone.connect(sToneG).connect(masterOut);
+      sTone.start(st);
+      sTone.stop(st + 0.12);
+      // Шум snare
+      const sSize = audioCtx.sampleRate * 0.12;
+      const sBuf = audioCtx.createBuffer(1, sSize, audioCtx.sampleRate);
+      const sData = sBuf.getChannelData(0);
+      for (let i = 0; i < sSize; i++) sData[i] = Math.random() * 2 - 1;
+      const sNoise = audioCtx.createBufferSource();
+      sNoise.buffer = sBuf;
+      const sFilter = audioCtx.createBiquadFilter();
+      sFilter.type = 'highpass';
+      sFilter.frequency.value = 1500;
+      const sNoiseG = audioCtx.createGain();
+      sNoiseG.gain.setValueAtTime(0.14, st);
+      sNoiseG.gain.exponentialRampToValueAtTime(0.001, st + 0.12);
+      sNoise.connect(sFilter).connect(sNoiseG).connect(masterOut);
+      sNoise.start(st);
+    }
+
+    // === HI-HAT 8-е ===
+    const hatStep = beat / 2;
+    const hatCount = Math.floor(dur / hatStep);
+    for (let h = 0; h < hatCount; h++) {
+      const ht = t0 + h * hatStep;
+      const isOpen = (h % 4 === 3);
+      const hSize = audioCtx.sampleRate * (isOpen ? 0.12 : 0.04);
+      const hBuf = audioCtx.createBuffer(1, hSize, audioCtx.sampleRate);
+      const hData = hBuf.getChannelData(0);
+      for (let i = 0; i < hSize; i++) hData[i] = Math.random() * 2 - 1;
+      const hat = audioCtx.createBufferSource();
+      hat.buffer = hBuf;
+      const hFilter = audioCtx.createBiquadFilter();
+      hFilter.type = 'highpass';
+      hFilter.frequency.value = 7000;
+      const hG = audioCtx.createGain();
+      const vol = isOpen ? 0.05 : 0.03;
+      hG.gain.setValueAtTime(vol, ht);
+      hG.gain.exponentialRampToValueAtTime(0.001, ht + (isOpen ? 0.12 : 0.04));
+      hat.connect(hFilter).connect(hG).connect(masterOut);
+      hat.start(ht);
+    }
+
+    // === GUITAR STABS - синкопированные ===
+    const stabPattern = [0.25, 0.875, 1.625, 2.125];
+    for (const stOff of stabPattern) {
+      if (stOff >= dur) break;
+      const sTime = t0 + stOff;
+      for (const f of chord) {
+        const o = audioCtx.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.value = f;
+        const lp = audioCtx.createBiquadFilter();
+        lp.type = 'bandpass';
+        lp.frequency.setValueAtTime(800, sTime);
+        lp.frequency.exponentialRampToValueAtTime(2000, sTime + 0.1);
+        lp.Q.value = 4;
+        const g = audioCtx.createGain();
+        g.gain.setValueAtTime(0, sTime);
+        g.gain.linearRampToValueAtTime(0.020, sTime + 0.005);
+        g.gain.exponentialRampToValueAtTime(0.001, sTime + 0.18);
+        o.connect(lp).connect(g).connect(masterOut);
+        o.start(sTime);
+        o.stop(sTime + 0.2);
+      }
+    }
+
+    // (BRASS HOOK убран по запросу - нет флейты/мелодии в READY музыке)
+
+    return t0 + dur;
+  }
+
+  function startReadyMusic() {
+    if (!audioCtx || readyNextScheduleAt > 0) return;
+    readyMusicState = null;
+    const t0 = audioCtx.currentTime + 0.1;
+    readyNextScheduleAt = scheduleReadyBlock(t0) - 0.5; // cross-fade
+  }
+
+  function tickReadyMusic() {
+    if (!audioCtx) return;
+    if (readyNextScheduleAt > 0 && audioCtx.currentTime >= readyNextScheduleAt - 1) {
+      readyNextScheduleAt = scheduleReadyBlock(readyNextScheduleAt) - 0.5;
+    }
+  }
+
+  function stopReadyMusic() {
+    readyNextScheduleAt = 0;
+    readyMusicState = null;
+  }
+
+  // Грустная мелодия в стиле "Chi Mai" Морриконе из фильма "Профессионал"
+  // Цикл из 8 фраз по 8 секунд, повторяется бесконечно с лёгкими вариациями
+
+  // Мелодия в A миноре - фиксированная последовательность нот (имитация Chi Mai)
+  // Формат: [нота, длительность в долях] - доля = 0.5 сек (~120 BPM)
+  // Используем простой повторяющийся паттерн с грустным настроением
+  const CHI_MAI_PHRASES = [
+    // Фраза 1: A4 → C5 → B4 → A4 (нисходящая, грустная)
+    [{f: 440.00, d: 1.5}, {f: 523.25, d: 0.5}, {f: 493.88, d: 1.0}, {f: 440.00, d: 2.0}],
+    // Фраза 2: A4 → C5 → E5 → D5 → C5 (взлёт и падение)
+    [{f: 440.00, d: 1.0}, {f: 523.25, d: 1.0}, {f: 659.25, d: 1.5}, {f: 587.33, d: 0.5}, {f: 523.25, d: 2.0}],
+    // Фраза 3: G4 → A4 → B4 → A4 (мягкое колыхание)
+    [{f: 392.00, d: 1.5}, {f: 440.00, d: 0.5}, {f: 493.88, d: 1.0}, {f: 440.00, d: 2.0}],
+    // Фраза 4: F4 → E4 → D4 → E4 (тихое разрешение)
+    [{f: 349.23, d: 1.0}, {f: 329.63, d: 1.0}, {f: 293.66, d: 1.0}, {f: 329.63, d: 2.0}]
+  ];
+
+  // Аккорды басовой партии под каждую фразу - простая прогрессия Am - C - F - Em
+  const CHI_MAI_BASS_CHORDS = [
+    [110, 130.81, 164.81],  // Am: A2, C3, E3
+    [130.81, 164.81, 196],  // C:  C3, E3, G3
+    [87.31, 110, 130.81],   // F:  F2, A2, C3 (Fmaj)
+    [82.41, 98, 123.47]     // Em: E2, G2, B2
+  ];
+
+  function scheduleOutroBlock(t0) {
+    if (!audioCtx) return;
+
+    if (!outroMelodyState) {
+      outroMelodyState = { phraseIdx: 0 };
+    }
+
+    const phraseIdx = outroMelodyState.phraseIdx % CHI_MAI_PHRASES.length;
+    const phrase = CHI_MAI_PHRASES[phraseIdx];
+    const bassChord = CHI_MAI_BASS_CHORDS[phraseIdx];
+    outroMelodyState.phraseIdx++;
+
+    const beatSec = 0.5;
+    let totalBeats = 0;
+    for (const n of phrase) totalBeats += n.d;
+    const dur = totalBeats * beatSec;
+
+    // === БАС - глубокая тоническая нота (отдельно от струнных) ===
+    const bassNote = audioCtx.createOscillator();
+    bassNote.type = 'sine';
+    bassNote.frequency.value = bassChord[0] / 2; // на октаву ниже
+    const bassGain = audioCtx.createGain();
+    bassGain.gain.setValueAtTime(0, t0);
+    bassGain.gain.linearRampToValueAtTime(0.15, t0 + 0.5);
+    bassGain.gain.linearRampToValueAtTime(0.13, t0 + dur - 0.5);
+    bassGain.gain.linearRampToValueAtTime(0, t0 + dur);
+    bassNote.connect(bassGain).connect(masterOut);
+    bassNote.start(t0);
+    bassNote.stop(t0 + dur + 0.1);
+
+    // === СТРУННЫЕ ПАДЫ - аккорд с лёгким vibrato (имитация скрипок/виолончели) ===
+    for (let i = 0; i < bassChord.length; i++) {
+      // Sawtooth для богатого спектра, через lowpass для мягкости
+      const o = audioCtx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = bassChord[i];
+      // Vibrato
+      const vib = audioCtx.createOscillator();
+      vib.frequency.value = 4.5;
+      const vibG = audioCtx.createGain();
+      vibG.gain.value = bassChord[i] * 0.005;
+      vib.connect(vibG).connect(o.frequency);
+      // Lowpass для смягчения
+      const lp = audioCtx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 1200;
+      lp.Q.value = 1;
+      const g = audioCtx.createGain();
+      const peak = i === 0 ? 0.07 : (i === 1 ? 0.05 : 0.04);
+      g.gain.setValueAtTime(0, t0);
+      g.gain.linearRampToValueAtTime(peak, t0 + 1.0); // плавная атака как у струнных
+      g.gain.linearRampToValueAtTime(peak * 0.85, t0 + dur - 1);
+      g.gain.linearRampToValueAtTime(0, t0 + dur);
+      o.connect(lp).connect(g).connect(masterOut);
+      o.start(t0);
+      o.stop(t0 + dur + 0.1);
+      vib.start(t0);
+      vib.stop(t0 + dur + 0.1);
+    }
+
+    // === АРПЕДЖИО на восьмых - перебор аккорда (имитация фортепиано/арфы) ===
+    // Восьмушки = 0.25 сек = одна доля beatSec/2
+    const arpInterval = beatSec / 2;
+    const arpCount = Math.floor(dur / arpInterval);
+    const arpPattern = [bassChord[0] * 2, bassChord[1] * 2, bassChord[2] * 2, bassChord[1] * 2]; // вверх-вниз
+    for (let a = 0; a < arpCount; a++) {
+      const at = t0 + a * arpInterval;
+      if (at > t0 + dur - 0.3) break;
+      const af = arpPattern[a % arpPattern.length];
+      const o = audioCtx.createOscillator();
+      o.type = 'triangle';
+      o.frequency.value = af;
+      const g = audioCtx.createGain();
+      g.gain.setValueAtTime(0, at);
+      g.gain.linearRampToValueAtTime(0.04, at + 0.005); // мгновенная атака
+      g.gain.exponentialRampToValueAtTime(0.001, at + 0.35); // плавный распад
+      o.connect(g).connect(masterOut);
+      o.start(at);
+      o.stop(at + 0.4);
+    }
+
+    // === ОСНОВНАЯ МЕЛОДИЯ - "пианино" (triangle + sine октава) ===
+    let noteT = t0 + 0.2;
+    for (const n of phrase) {
+      const noteDur = n.d * beatSec;
+      // Triangle - основное тело ноты
+      const o = audioCtx.createOscillator();
+      o.type = 'triangle';
+      o.frequency.value = n.f;
+      const g = audioCtx.createGain();
+      g.gain.setValueAtTime(0, noteT);
+      g.gain.linearRampToValueAtTime(0.14, noteT + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.05, noteT + noteDur * 0.4);
+      g.gain.exponentialRampToValueAtTime(0.001, noteT + noteDur * 0.95);
+      o.connect(g).connect(masterOut);
+      o.start(noteT);
+      o.stop(noteT + noteDur);
+
+      // Sine октава выше - для блеска
+      const o2 = audioCtx.createOscillator();
+      o2.type = 'sine';
+      o2.frequency.value = n.f * 2;
+      const g2 = audioCtx.createGain();
+      g2.gain.setValueAtTime(0, noteT);
+      g2.gain.linearRampToValueAtTime(0.05, noteT + 0.02);
+      g2.gain.exponentialRampToValueAtTime(0.001, noteT + noteDur * 0.7);
+      o2.connect(g2).connect(masterOut);
+      o2.start(noteT);
+      o2.stop(noteT + noteDur);
+
+      // Sine октава ниже - для глубины (контр-голос)
+      const o3 = audioCtx.createOscillator();
+      o3.type = 'sine';
+      o3.frequency.value = n.f / 2;
+      const g3 = audioCtx.createGain();
+      g3.gain.setValueAtTime(0, noteT);
+      g3.gain.linearRampToValueAtTime(0.06, noteT + 0.05);
+      g3.gain.exponentialRampToValueAtTime(0.001, noteT + noteDur * 0.85);
+      o3.connect(g3).connect(masterOut);
+      o3.start(noteT);
+      o3.stop(noteT + noteDur);
+
+      noteT += noteDur;
+    }
+
+    // === БАС-БАРАБАН на сильные доли (1 и 3) ===
+    const kickBeats = Math.floor(totalBeats);
+    for (let kb = 0; kb < kickBeats; kb += 2) {
+      const kt = t0 + kb * beatSec;
+      if (kt > t0 + dur - 0.3) break;
+      const kick = audioCtx.createOscillator();
+      kick.type = 'sine';
+      kick.frequency.setValueAtTime(70, kt);
+      kick.frequency.exponentialRampToValueAtTime(35, kt + 0.18);
+      const kickG = audioCtx.createGain();
+      kickG.gain.setValueAtTime(0, kt);
+      kickG.gain.linearRampToValueAtTime(0.10, kt + 0.005);
+      kickG.gain.exponentialRampToValueAtTime(0.001, kt + 0.22);
+      kick.connect(kickG).connect(masterOut);
+      kick.start(kt);
+      kick.stop(kt + 0.25);
+    }
+
+    // === SHAKER - тихий шейкер на каждую долю для движения ===
+    const shakerBeats = Math.floor(totalBeats * 2);
+    for (let sb = 0; sb < shakerBeats; sb++) {
+      const st = t0 + sb * (beatSec / 2);
+      if (st > t0 + dur - 0.2) break;
+      const shakerSize = audioCtx.sampleRate * 0.06;
+      const shakerBuf = audioCtx.createBuffer(1, shakerSize, audioCtx.sampleRate);
+      const shakerData = shakerBuf.getChannelData(0);
+      for (let i = 0; i < shakerSize; i++) shakerData[i] = (Math.random() * 2 - 1);
+      const shaker = audioCtx.createBufferSource();
+      shaker.buffer = shakerBuf;
+      const shFilter = audioCtx.createBiquadFilter();
+      shFilter.type = 'highpass';
+      shFilter.frequency.value = 4000;
+      const shGain = audioCtx.createGain();
+      const shVol = sb % 2 === 0 ? 0.025 : 0.015; // акцент на сильных
+      shGain.gain.setValueAtTime(shVol, st);
+      shGain.gain.exponentialRampToValueAtTime(0.001, st + 0.06);
+      shaker.connect(shFilter).connect(shGain).connect(masterOut);
+      shaker.start(st);
+    }
+
+    return t0 + dur;
+  }
+
   function playOutroMelody() {
     if (!audioCtx) return;
+    outroMelodyState = null; // сбрасываем мутации
     const t0 = audioCtx.currentTime + 0.1;
-    const dur = 8;
-    // Глубокий гул - возвращение в воду
-    const drone1 = audioCtx.createOscillator();
-    drone1.type = 'sine';
-    drone1.frequency.value = 55;
-    const droneG1 = audioCtx.createGain();
-    droneG1.gain.setValueAtTime(0, t0);
-    droneG1.gain.linearRampToValueAtTime(0.18, t0 + 1.5);
-    droneG1.gain.linearRampToValueAtTime(0.15, t0 + dur - 1);
-    droneG1.gain.linearRampToValueAtTime(0, t0 + dur);
-    drone1.connect(droneG1).connect(masterOut);
-    drone1.start(t0);
-    drone1.stop(t0 + dur + 0.1);
+    outroNextScheduleAt = scheduleOutroBlock(t0) - 1; // следующий блок чуть раньше для cross-fade
 
-    // Светлый обертон - "достижение"
-    const drone2 = audioCtx.createOscillator();
-    drone2.type = 'sine';
-    drone2.frequency.value = 220;
-    const drone2Mod = audioCtx.createOscillator();
-    drone2Mod.frequency.value = 0.2;
-    const drone2ModG = audioCtx.createGain();
-    drone2ModG.gain.value = 2;
-    drone2Mod.connect(drone2ModG).connect(drone2.frequency);
-    const droneG2 = audioCtx.createGain();
-    droneG2.gain.setValueAtTime(0, t0);
-    droneG2.gain.linearRampToValueAtTime(0.06, t0 + 2);
-    droneG2.gain.linearRampToValueAtTime(0.06, t0 + dur - 1);
-    droneG2.gain.linearRampToValueAtTime(0, t0 + dur);
-    drone2.connect(droneG2).connect(masterOut);
-    drone2.start(t0);
-    drone2Mod.start(t0);
-    drone2.stop(t0 + dur + 0.1);
-    drone2Mod.stop(t0 + dur + 0.1);
-
-    // Третий обертон - чуть выше, добавляет торжественности
-    const drone3 = audioCtx.createOscillator();
-    drone3.type = 'sine';
-    drone3.frequency.value = 330; // E4
-    const droneG3 = audioCtx.createGain();
-    droneG3.gain.setValueAtTime(0, t0 + 1);
-    droneG3.gain.linearRampToValueAtTime(0.05, t0 + 3);
-    droneG3.gain.linearRampToValueAtTime(0.05, t0 + dur - 1);
-    droneG3.gain.linearRampToValueAtTime(0, t0 + dur);
-    drone3.connect(droneG3).connect(masterOut);
-    drone3.start(t0 + 1);
-    drone3.stop(t0 + dur + 0.1);
-
-    // Подводный шум
-    const noiseSize = audioCtx.sampleRate * dur;
-    const noiseBuf = audioCtx.createBuffer(1, noiseSize, audioCtx.sampleRate);
-    const noiseData = noiseBuf.getChannelData(0);
-    for (let i = 0; i < noiseSize; i++) noiseData[i] = Math.random() * 2 - 1;
-    const noiseSrc = audioCtx.createBufferSource();
-    noiseSrc.buffer = noiseBuf;
-    const noiseFilter = audioCtx.createBiquadFilter();
-    noiseFilter.type = 'lowpass';
-    noiseFilter.frequency.value = 400;
-    const noiseGain = audioCtx.createGain();
-    noiseGain.gain.setValueAtTime(0, t0);
-    noiseGain.gain.linearRampToValueAtTime(0.06, t0 + 3);
-    noiseGain.gain.linearRampToValueAtTime(0.06, t0 + dur - 1);
-    noiseGain.gain.linearRampToValueAtTime(0, t0 + dur);
-    noiseSrc.connect(noiseFilter).connect(noiseGain).connect(masterOut);
-    noiseSrc.start(t0);
-
-    // Всплеск когда рыба ныряет
-    const splashT = t0 + 2.7;
+    // Всплеск когда рыба ныряет (один раз в начале)
+    const splashT = audioCtx.currentTime + 6; // ~6 сек после старта - время фазы 3 outro
     const splashSize = audioCtx.sampleRate * 0.5;
     const splashBuf = audioCtx.createBuffer(1, splashSize, audioCtx.sampleRate);
     const splashData = splashBuf.getChannelData(0);
@@ -1125,231 +1548,113 @@ document.addEventListener('click', lockOrientation, { once: true });
     splashFilter.type = 'highpass';
     splashFilter.frequency.value = 800;
     const splashGain = audioCtx.createGain();
-    splashGain.gain.value = 0.12;
+    splashGain.gain.value = 0.10;
     splashSrc.connect(splashFilter).connect(splashGain).connect(masterOut);
     splashSrc.start(splashT);
   }
 
+  // Тик планировщика бесконечной музыки - вызывается из updateOutro
+  function tickOutroMusic() {
+    if (!audioCtx) return;
+    if (outroNextScheduleAt > 0 && audioCtx.currentTime >= outroNextScheduleAt - 2) {
+      outroNextScheduleAt = scheduleOutroBlock(outroNextScheduleAt) - 1;
+    }
+  }
+
+  // Вступительная мелодия - атмосферная, плавная, "первобытный океан → пробуждение жизни"
+  // Звук intro - только всплеск выпрыгивающей рыбы
+  // Звук intro - бульканье под водой + выраженный всплеск при выныривании рыбы
   function playIntroMelody() {
     if (!audioCtx) return;
     const t0 = audioCtx.currentTime + 0.1;
-    const dur = 4.5;
 
-    // === БАСОВЫЙ ГУЛ - очень низкий, "глубокая вода" ===
-    // A0 = 27.5Hz - почти инфразвук
-    const drone1 = audioCtx.createOscillator();
-    drone1.type = 'sine';
-    drone1.frequency.value = 55; // A1
-    const droneG1 = audioCtx.createGain();
-    droneG1.gain.setValueAtTime(0, t0);
-    droneG1.gain.linearRampToValueAtTime(0.15, t0 + 1.5);
-    droneG1.gain.linearRampToValueAtTime(0.15, t0 + dur - 1);
-    droneG1.gain.linearRampToValueAtTime(0, t0 + dur);
-    drone1.connect(droneG1).connect(masterOut);
-    drone1.start(t0);
-    drone1.stop(t0 + dur + 0.1);
-
-    // Обертон чуть выше для глубины
-    const drone2 = audioCtx.createOscillator();
-    drone2.type = 'sine';
-    drone2.frequency.value = 110; // A2
-    // Лёгкая модуляция - ощущение волн
-    const droneMod = audioCtx.createOscillator();
-    droneMod.frequency.value = 0.15;
-    const droneModG = audioCtx.createGain();
-    droneModG.gain.value = 1.5;
-    droneMod.connect(droneModG).connect(drone2.frequency);
-    const droneG2 = audioCtx.createGain();
-    droneG2.gain.setValueAtTime(0, t0);
-    droneG2.gain.linearRampToValueAtTime(0.06, t0 + 2);
-    droneG2.gain.linearRampToValueAtTime(0.06, t0 + dur - 1);
-    droneG2.gain.linearRampToValueAtTime(0, t0 + dur);
-    drone2.connect(droneG2).connect(masterOut);
-    drone2.start(t0);
-    droneMod.start(t0);
-    drone2.stop(t0 + dur + 0.1);
-    droneMod.stop(t0 + dur + 0.1);
-
-    // Тихий "светлый" обертон в финале (когда выходит на сушу)
-    const drone3 = audioCtx.createOscillator();
-    drone3.type = 'sine';
-    drone3.frequency.value = 220; // A3
-    const droneG3 = audioCtx.createGain();
-    droneG3.gain.setValueAtTime(0, t0);
-    droneG3.gain.setValueAtTime(0, t0 + 1.5);  // молчит первые 1.5 сек
-    droneG3.gain.linearRampToValueAtTime(0.04, t0 + 2.5);
-    droneG3.gain.linearRampToValueAtTime(0.04, t0 + dur - 0.5);
-    droneG3.gain.linearRampToValueAtTime(0, t0 + dur);
-    drone3.connect(droneG3).connect(masterOut);
-    drone3.start(t0 + 1.5);
-    drone3.stop(t0 + dur + 0.1);
-
-    // === ПОДВОДНЫЙ ШУМ - белый шум через lowpass-фильтр ===
-    const noiseLen = dur;
-    const bufferSize = audioCtx.sampleRate * noiseLen;
-    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-      data[i] = Math.random() * 2 - 1;
-    }
-    const noiseSrc = audioCtx.createBufferSource();
-    noiseSrc.buffer = buffer;
-    // Lowpass для глухого подводного шума
-    const filter = audioCtx.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.value = 400;
-    filter.Q.value = 1;
-    const noiseGain = audioCtx.createGain();
-    noiseGain.gain.setValueAtTime(0, t0);
-    noiseGain.gain.linearRampToValueAtTime(0.08, t0 + 1);
-    // К концу шум стихает, переходит в "ветер на суше"
-    noiseGain.gain.linearRampToValueAtTime(0.08, t0 + 3);
-    noiseGain.gain.linearRampToValueAtTime(0.04, t0 + 4);
-    noiseGain.gain.linearRampToValueAtTime(0, t0 + dur);
-    noiseSrc.connect(filter).connect(noiseGain).connect(masterOut);
-    noiseSrc.start(t0);
-
-    // === ПУЗЫРЬКОВЫЕ ЗВУКИ - редкие, тихие ===
-    for (let i = 0; i < 5; i++) {
-      const bt = t0 + 0.5 + i * 0.6 + Math.random() * 0.3;
-      if (bt > t0 + 3) break; // только пока под водой
+    // === БУЛЬКАНЬЕ - короткие "плоп" звуки в первые 2.5 секунды (до выныривания) ===
+    for (let i = 0; i < 12; i++) {
+      const bt = t0 + 0.2 + i * 0.18 + Math.random() * 0.1;
+      if (bt > t0 + 2.5) break;
       const bubbleOsc = audioCtx.createOscillator();
       bubbleOsc.type = 'sine';
-      const startFreq = 600 + Math.random() * 300;
+      const startFreq = 600 + Math.random() * 600;
       bubbleOsc.frequency.setValueAtTime(startFreq, bt);
-      bubbleOsc.frequency.exponentialRampToValueAtTime(startFreq * 0.4, bt + 0.18);
+      bubbleOsc.frequency.exponentialRampToValueAtTime(startFreq * 0.4, bt + 0.12);
       const bubbleGain = audioCtx.createGain();
       bubbleGain.gain.setValueAtTime(0, bt);
-      bubbleGain.gain.linearRampToValueAtTime(0.04, bt + 0.01);
-      bubbleGain.gain.linearRampToValueAtTime(0, bt + 0.18);
+      bubbleGain.gain.linearRampToValueAtTime(0.08, bt + 0.005);
+      bubbleGain.gain.exponentialRampToValueAtTime(0.001, bt + 0.13);
       bubbleOsc.connect(bubbleGain).connect(masterOut);
       bubbleOsc.start(bt);
-      bubbleOsc.stop(bt + 0.25);
+      bubbleOsc.stop(bt + 0.15);
     }
 
-    // === ВСПЛЕСК ВОДЫ когда рыба выпрыгивает ===
-    // intro теперь стартует с фазы 2 (4.2 секунды), фаза 3 прыжок на 0.7-1.5 сек
-    const splashT = t0 + 0.7;
-    const splashLen = 0.5;
-    const splashSize = audioCtx.sampleRate * splashLen;
-    const splashBuf = audioCtx.createBuffer(1, splashSize, audioCtx.sampleRate);
-    const splashData = splashBuf.getChannelData(0);
-    for (let i = 0; i < splashSize; i++) {
-      splashData[i] = (Math.random() * 2 - 1) * Math.exp(-i / splashSize * 4);
+    // === ВЫРАЖЕННЫЙ ВСПЛЕСК - на 2.7 сек когда рыба выпрыгивает из воды ===
+    const splashT = t0 + 2.7;
+
+    // 1) Большой высокочастотный шум - "разбрызгивание"
+    const splashLen1 = 0.6;
+    const buf1Size = audioCtx.sampleRate * splashLen1;
+    const buf1 = audioCtx.createBuffer(1, buf1Size, audioCtx.sampleRate);
+    const data1 = buf1.getChannelData(0);
+    for (let i = 0; i < buf1Size; i++) {
+      data1[i] = (Math.random() * 2 - 1) * Math.exp(-i / buf1Size * 4);
     }
-    const splashSrc = audioCtx.createBufferSource();
-    splashSrc.buffer = splashBuf;
-    const splashFilter = audioCtx.createBiquadFilter();
-    splashFilter.type = 'highpass';
-    splashFilter.frequency.value = 800;
-    const splashGain = audioCtx.createGain();
-    splashGain.gain.value = 0.12;
-    splashSrc.connect(splashFilter).connect(splashGain).connect(masterOut);
-    splashSrc.start(splashT);
+    const splash1 = audioCtx.createBufferSource();
+    splash1.buffer = buf1;
+    const filter1 = audioCtx.createBiquadFilter();
+    filter1.type = 'highpass';
+    filter1.frequency.value = 2000;
+    const gain1 = audioCtx.createGain();
+    gain1.gain.value = 0.32;
+    splash1.connect(filter1).connect(gain1).connect(masterOut);
+    splash1.start(splashT);
 
-    // === ВЫРАЗИТЕЛЬНЫЙ АМБИЕНТНЫЙ ЗВУК ТРАНСФОРМАЦИИ - на 1.5 секунды ===
-    const transT = t0 + 1.5;
-
-    // 1. Whoosh - нарастающий шум, "проезжающий" вверх по частоте
-    const whooshLen = 0.6;
-    const whooshSize = audioCtx.sampleRate * whooshLen;
-    const whooshBuf = audioCtx.createBuffer(1, whooshSize, audioCtx.sampleRate);
-    const whooshData = whooshBuf.getChannelData(0);
-    for (let i = 0; i < whooshSize; i++) {
-      whooshData[i] = Math.random() * 2 - 1;
+    // 2) Средние частоты - "хлюп" воды
+    const splashLen2 = 0.4;
+    const buf2Size = audioCtx.sampleRate * splashLen2;
+    const buf2 = audioCtx.createBuffer(1, buf2Size, audioCtx.sampleRate);
+    const data2 = buf2.getChannelData(0);
+    for (let i = 0; i < buf2Size; i++) {
+      data2[i] = (Math.random() * 2 - 1) * Math.exp(-i / buf2Size * 6);
     }
-    const whooshSrc = audioCtx.createBufferSource();
-    whooshSrc.buffer = whooshBuf;
-    const whooshFilter = audioCtx.createBiquadFilter();
-    whooshFilter.type = 'bandpass';
-    whooshFilter.frequency.setValueAtTime(300, transT - 0.3);
-    whooshFilter.frequency.exponentialRampToValueAtTime(2000, transT + 0.2);
-    whooshFilter.Q.value = 1.5;
-    const whooshGain = audioCtx.createGain();
-    whooshGain.gain.setValueAtTime(0, transT - 0.3);
-    whooshGain.gain.linearRampToValueAtTime(0.14, transT);
-    whooshGain.gain.linearRampToValueAtTime(0, transT + 0.4);
-    whooshSrc.connect(whooshFilter).connect(whooshGain).connect(masterOut);
-    whooshSrc.start(transT - 0.3);
+    const splash2 = audioCtx.createBufferSource();
+    splash2.buffer = buf2;
+    const filter2 = audioCtx.createBiquadFilter();
+    filter2.type = 'bandpass';
+    filter2.frequency.value = 800;
+    filter2.Q.value = 1.5;
+    const gain2 = audioCtx.createGain();
+    gain2.gain.value = 0.28;
+    splash2.connect(filter2).connect(gain2).connect(masterOut);
+    splash2.start(splashT);
 
-    // 2. Sub-bass impact - глубокий низкий "удар" момента превращения
-    const subOsc = audioCtx.createOscillator();
-    subOsc.type = 'sine';
-    subOsc.frequency.setValueAtTime(80, transT);
-    subOsc.frequency.exponentialRampToValueAtTime(40, transT + 1.5);
-    const subGain = audioCtx.createGain();
-    subGain.gain.setValueAtTime(0, transT);
-    subGain.gain.linearRampToValueAtTime(0.22, transT + 0.05);
-    subGain.gain.exponentialRampToValueAtTime(0.001, transT + 2.0);
-    subOsc.connect(subGain).connect(masterOut);
-    subOsc.start(transT);
-    subOsc.stop(transT + 2.1);
+    // 3) Низкий "шлёп" - тело рассекает воду
+    const thump = audioCtx.createOscillator();
+    thump.type = 'sine';
+    thump.frequency.setValueAtTime(180, splashT);
+    thump.frequency.exponentialRampToValueAtTime(60, splashT + 0.15);
+    const thumpG = audioCtx.createGain();
+    thumpG.gain.setValueAtTime(0, splashT);
+    thumpG.gain.linearRampToValueAtTime(0.20, splashT + 0.005);
+    thumpG.gain.exponentialRampToValueAtTime(0.001, splashT + 0.18);
+    thump.connect(thumpG).connect(masterOut);
+    thump.start(splashT);
+    thump.stop(splashT + 0.2);
 
-    // 3. Атмосферный swell - длинная гармоника, нарастает и медленно стихает
-    // Без явной мелодии - просто атмосферное полотно из 3 расстроенных тонов
-    const swellFreqs = [220, 330.5, 440.7]; // A3, ~E4 (расстроенный), ~A4 (расстроенный)
-    for (let i = 0; i < swellFreqs.length; i++) {
-      const swellOsc = audioCtx.createOscillator();
-      swellOsc.type = 'sine';
-      swellOsc.frequency.value = swellFreqs[i];
-      const swellGain = audioCtx.createGain();
-      swellGain.gain.setValueAtTime(0, transT);
-      // Плавная атака (не сразу удар, а нарастание)
-      swellGain.gain.linearRampToValueAtTime(0.07, transT + 0.4);
-      // Долгий sustain с лёгким спадом
-      swellGain.gain.linearRampToValueAtTime(0.05, transT + 1.5);
-      // Медленное затухание
-      swellGain.gain.linearRampToValueAtTime(0, transT + 2.5);
-      // Лёгкий лоупасс для мягкости
-      const swellFilter = audioCtx.createBiquadFilter();
-      swellFilter.type = 'lowpass';
-      swellFilter.frequency.value = 2000;
-      swellOsc.connect(swellFilter).connect(swellGain).connect(masterOut);
-      swellOsc.start(transT);
-      swellOsc.stop(transT + 2.7);
+    // 4) Доп пузырьки сразу после всплеска (вода стекает с рыбы)
+    for (let i = 0; i < 6; i++) {
+      const bt = splashT + 0.15 + i * 0.05 + Math.random() * 0.04;
+      const bo = audioCtx.createOscillator();
+      bo.type = 'sine';
+      const sf = 1000 + Math.random() * 600;
+      bo.frequency.setValueAtTime(sf, bt);
+      bo.frequency.exponentialRampToValueAtTime(sf * 0.5, bt + 0.08);
+      const bg = audioCtx.createGain();
+      bg.gain.setValueAtTime(0, bt);
+      bg.gain.linearRampToValueAtTime(0.06, bt + 0.005);
+      bg.gain.exponentialRampToValueAtTime(0.001, bt + 0.1);
+      bo.connect(bg).connect(masterOut);
+      bo.start(bt);
+      bo.stop(bt + 0.12);
     }
-
-    // 4. Едва слышимый "шиммер" - верхний обертон даёт мерцание
-    // Тихий шум через узкий bandpass на высокой частоте
-    const shimmerSize = audioCtx.sampleRate * 2;
-    const shimmerBuf = audioCtx.createBuffer(1, shimmerSize, audioCtx.sampleRate);
-    const shimmerData = shimmerBuf.getChannelData(0);
-    for (let i = 0; i < shimmerSize; i++) {
-      shimmerData[i] = Math.random() * 2 - 1;
-    }
-    const shimmerSrc = audioCtx.createBufferSource();
-    shimmerSrc.buffer = shimmerBuf;
-    const shimmerFilter = audioCtx.createBiquadFilter();
-    shimmerFilter.type = 'bandpass';
-    shimmerFilter.frequency.value = 4000;
-    shimmerFilter.Q.value = 8;
-    const shimmerGain = audioCtx.createGain();
-    shimmerGain.gain.setValueAtTime(0, transT);
-    shimmerGain.gain.linearRampToValueAtTime(0.04, transT + 0.5);
-    shimmerGain.gain.linearRampToValueAtTime(0, transT + 2.0);
-    shimmerSrc.connect(shimmerFilter).connect(shimmerGain).connect(masterOut);
-    shimmerSrc.start(transT);
-
-    // === ВЕТЕР - после выхода из воды ===
-    const windSize = audioCtx.sampleRate * 3;
-    const windBuf = audioCtx.createBuffer(1, windSize, audioCtx.sampleRate);
-    const windData = windBuf.getChannelData(0);
-    for (let i = 0; i < windSize; i++) {
-      windData[i] = Math.random() * 2 - 1;
-    }
-    const windSrc = audioCtx.createBufferSource();
-    windSrc.buffer = windBuf;
-    const windFilter = audioCtx.createBiquadFilter();
-    windFilter.type = 'bandpass';
-    windFilter.frequency.value = 600;
-    windFilter.Q.value = 0.5;
-    const windGain = audioCtx.createGain();
-    windGain.gain.setValueAtTime(0, t0 + 3);
-    windGain.gain.linearRampToValueAtTime(0.04, t0 + 4);
-    windGain.gain.linearRampToValueAtTime(0.04, t0 + dur - 0.5);
-    windGain.gain.linearRampToValueAtTime(0, t0 + dur);
-    windSrc.connect(windFilter).connect(windGain).connect(masterOut);
-    windSrc.start(t0 + 3);
   }
 
   function onBeat(absStep, p) {
@@ -1370,15 +1675,23 @@ document.addEventListener('click', lockOrientation, { once: true });
       pendingJumps.push({ step: absStep, type: 'cactus' });
       cometPowerSignal = true;
     }
+    // Птеродактиль - появляется только после 5-го побеждённого босса
+    const cyclePos128 = absStep % 128;
+    if (BIRD_SPAWN_POSITIONS.indexOf(cyclePos128) !== -1 && bossDefeated >= 5) {
+      pendingJumps.push({ step: absStep, type: 'bird' });
+    }
     // Crash на p=0 bar4=0 (раз в 4 такта) - сюда планируем ЯМУ + герой какает
     if (p === 0 && bar4 === 0 && absStep > 0) {
       cometCrashSignal = true;
       dinoPoopSignal = true;
-      if (score > 120) pendingJumps.push({ step: absStep, type: 'pit' });
+      // Ямы появляются только после 1-го побеждённого босса
+      if (score > 120 && bossDefeated >= 1) pendingJumps.push({ step: absStep, type: 'pit' });
     }
     // Вокальный хук "Right Here Right Now" - на каждый второй крэш
     if (p === 0 && bar4 === 0 && absStep > 0 && (absStep / 64) % 2 === 1) {
       speakHook();
+      // Поезд проезжает на заднем плане при вокале
+      spawnTrain();
     }
     // Каждые 4 такта - единорог
     if (absStep % 64 === 0 && bar > 0 && srand() < 0.5) {
@@ -1429,9 +1742,17 @@ document.addEventListener('click', lockOrientation, { once: true });
 
   function startGame() {
     state = STATE.INTRO;
+    stopReadyMusic(); // останавливаем funk музыку с READY экрана
     // Запускаем со второй фазы (всплытие) - первая фаза (плавание) уже была на READY-экране
     introTimer = Math.floor(INTRO_LEN * 0.70);
     dino.evolution = 0;
+    // Явно ставим dino в стандартную позицию (фикс для мобильных где DINO_X мог поменяться)
+    dino.x = DINO_X;
+    dino.y = GROUND_Y - dino.h;
+    dino.vy = 0;
+    dino.onGround = true;
+    dino.riding = null;
+    dino.onPlatform = null;
     initAudio();
     playIntroMelody();
   }
@@ -1443,6 +1764,7 @@ document.addEventListener('click', lockOrientation, { once: true });
       musicStartTime = audioCtx.currentTime + 0.15;
       lastSteppedAt = -1;
     }
+    flatGroundTimer = 300; // 5 секунд ровной поверхности без препятствий
     // Обелиск проходит через сцену в начале игры
     monolith = {
       x: W + 50,
@@ -1451,13 +1773,43 @@ document.addEventListener('click', lockOrientation, { once: true });
     };
   }
 
+  // Секретный пароль "itted" - старт с 18-го уровня (bossDefeated = 17)
+  let cheatBuffer = '';
   document.addEventListener('keydown', (e) => {
     if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyR', 'KeyF'].includes(e.code)) e.preventDefault();
     keys[e.code] = true;
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    // Чит-коды: 'ittedNN' - переход на NN-й уровень (01-19)
+    // Формат строго двузначный: itted01, itted02, ..., itted19
+    if ((state === STATE.READY || state === STATE.OVER) && e.key && e.key.length === 1) {
+      cheatBuffer += e.key.toLowerCase();
+      if (cheatBuffer.length > 12) cheatBuffer = cheatBuffer.slice(-12);
+      const matchN = cheatBuffer.match(/itted(\d{2})$/);
+      if (matchN) {
+        const n = parseInt(matchN[1], 10);
+        if (n >= 1 && n <= 19) {
+          cheatBuffer = '';
+          if (state === STATE.OVER) resetGame();
+          startGame();
+          const bd = n - 1;
+          bossDefeated = bd;
+          dino.evolution = evoStageForBoss(bd);
+          score = bd * 100;
+          if (n === 19) {
+            // Уровень 19: ящерица бежит без босса до outro - 5 сек
+            outroPendingTimer = 300;
+          } else {
+            // Чит-код: следующий босс спавнится через 5 секунд
+            cheatBossTimer = 300;
+          }
+          return;
+        }
+      }
+    }
     if (state === STATE.READY && (e.code === 'Space' || e.code === 'ArrowUp')) { startGame(); return; }
     if (state === STATE.OVER && (e.code === 'Space' || e.code === 'KeyR' || e.code === 'ArrowUp')) { resetGame(); startGame(); return; }
     if (state === STATE.OUTRO && outroTimer <= 0 && (e.code === 'Space' || e.code === 'KeyR' || e.code === 'ArrowUp')) {
+      outroNextScheduleAt = 0;  // останавливаем планировщик музыки
       resetGame();
       state = STATE.READY;
       return;
@@ -1484,6 +1836,7 @@ document.addEventListener('click', lockOrientation, { once: true });
     if (state === STATE.READY) { startGame(); return; }
     if (state === STATE.OVER) { resetGame(); startGame(); return; }
     if (state === STATE.OUTRO && outroTimer <= 0) {
+      outroNextScheduleAt = 0;
       resetGame();
       state = STATE.READY;
       return;
@@ -1533,6 +1886,7 @@ document.addEventListener('click', lockOrientation, { once: true });
     nextPlatformIn = 250;
     nextCrowdIn = 600;
     pendingJumps.length = 0;
+    pendingDucks.length = 0;
     comets.length = 0;
     newspapers.length = 0;
     POWER_PATTERN = new Array(64).fill(0);
@@ -1547,11 +1901,14 @@ document.addEventListener('click', lockOrientation, { once: true });
     activeBoss = null;
     bossDefeated = 0;
     outroPendingTimer = 0;
+    cheatBossTimer = 0;
+    flatGroundTimer = 0;
     outroTimer = 0;
     weather.type = 'none';
     weather.timer = 2250;
     weather.particles.length = 0;
     weatherCycleIdx = 3;
+    train = null;
     bgStage = 0;
     prevDayPhase = 0.15;
     // Сброс прогрессии музыки на исходную (минор A) и POWER_PATTERN
@@ -1574,14 +1931,15 @@ document.addEventListener('click', lockOrientation, { once: true });
   function spawnNewspapers() {
     const targetX = dino.x + dino.w / 2;
     const targetY = dino.y + 12; // в лицо
-    // 5 газет с небольшой задержкой друг от друга
-    for (let i = 0; i < 5; i++) {
-      // Стартовая позиция справа за экраном
-      const startX = W + 30 + i * 40;
+    // 10 газет - часть прилетает с видимого экрана, часть с одного экрана впереди
+    for (let i = 0; i < 10; i++) {
+      // Стартовая позиция: первые 5 за правым краем экрана, следующие 5 - на экран дальше
+      const startX = W + 30 + i * 40 + (i >= 5 ? W : 0);
       const startY = 30 + Math.random() * (GROUND_Y - 80);
-      const flightTime = 30 + i * 4; // кадров полёта
+      // Дальние газеты летят дольше (им нужно пролететь больше)
+      const flightTime = 30 + i * 4 + (i >= 5 ? 30 : 0);
       const vx = (targetX - startX) / flightTime;
-      const vy = (targetY - startY) / flightTime - 0.5 * 0.4 * flightTime; // дуга
+      const vy = (targetY - startY) / flightTime - 0.5 * 0.4 * flightTime;
       newspapers.push({
         x: startX,
         y: startY,
@@ -1593,8 +1951,132 @@ document.addEventListener('click', lockOrientation, { once: true });
         flightTime: flightTime,
         framesLived: 0,
         hit: false,
-        life: 200
+        life: 240
       });
+    }
+  }
+
+  // Поезд на заднем плане - проезжает справа налево навстречу
+  // Запускается при вокальном хуке. Длится ~6 секунд - проходит через весь экран
+  function spawnTrain() {
+    if (train) return;
+    // ДЛИННЫЙ поезд - локомотив + ~50 вагонов (раньше было 4-5, теперь в 10 раз больше)
+    const carCount = 50 + Math.floor(Math.random() * 10);
+    const cars = [{ kind: 'loco', w: 14 }];  // в 5 раз меньше
+    for (let i = 0; i < carCount; i++) {
+      cars.push({ kind: 'car', w: 12 + Math.floor(Math.random() * 4) });
+    }
+    let totalLen = 0;
+    for (const c of cars) totalLen += c.w + 1;
+    train = {
+      x: W + 50,
+      vx: -17.5,  // в 5 раз быстрее (было -3.5)
+      cars: cars,
+      totalLen: totalLen,
+      smokeTimer: 0,
+      smokes: []
+    };
+    // Гудок поезда
+    if (audioCtx) {
+      const t = audioCtx.currentTime + 0.1;
+      const o1 = audioCtx.createOscillator();
+      o1.type = 'sawtooth';
+      o1.frequency.value = 150;
+      const o2 = audioCtx.createOscillator();
+      o2.type = 'sine';
+      o2.frequency.value = 220;
+      const g = audioCtx.createGain();
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(0.06, t + 0.1);
+      g.gain.linearRampToValueAtTime(0.06, t + 0.7);
+      g.gain.linearRampToValueAtTime(0, t + 1.0);
+      const lp = audioCtx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 600;
+      o1.connect(lp);
+      o2.connect(lp);
+      lp.connect(g);
+      g.connect(masterOut);
+      o1.start(t); o2.start(t);
+      o1.stop(t + 1.1); o2.stop(t + 1.1);
+    }
+  }
+
+  function updateTrain() {
+    if (!train) return;
+    train.x += train.vx;
+    // Дым реже - локомотив маленький и быстрый
+    train.smokeTimer--;
+    if (train.smokeTimer <= 0) {
+      train.smokeTimer = 6;
+      const locoX = train.x + train.cars[0].w * 0.65;
+      train.smokes.push({
+        x: locoX,
+        y: HORIZON_Y - 22,  // прямо над поездом на горизонте
+        vy: -0.4,
+        size: 1.5,
+        life: 60,
+        wobble: Math.random() * Math.PI * 2
+      });
+    }
+    for (const s of train.smokes) {
+      s.y += s.vy;
+      s.x += Math.sin(frameCount * 0.05 + s.wobble) * 0.3;
+      s.size += 0.04;
+      s.life--;
+    }
+    train.smokes = train.smokes.filter(s => s.life > 0);
+    if (train.x + train.totalLen < -50) {
+      train = null;
+    }
+  }
+
+  function drawTrain() {
+    if (!train) return;
+    // Поезд едет ЧЁТКО ПО ГОРИЗОНТУ - на линии земли вдалеке
+    const trainGroundY = HORIZON_Y - 1; // прямо на горизонте
+    // Дым
+    for (const s of train.smokes) {
+      const alpha = Math.min(1, s.life / 50) * 0.5;
+      ctx.fillStyle = 'rgba(180,180,190,' + alpha + ')';
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Тонкие рельсы (1 пиксель)
+    ctx.fillStyle = 'rgba(80,80,90,0.5)';
+    ctx.fillRect(train.x - 20, trainGroundY + 1, train.totalLen + 40, 1);
+    // Вагоны - маленькие, размер в 5 раз меньше
+    let cx = train.x;
+    const carH = 5;  // в 5 раз меньше (было 22)
+    const carY = trainGroundY - carH;
+    for (let i = 0; i < train.cars.length; i++) {
+      const c = train.cars[i];
+      if (c.kind === 'loco') {
+        // Локомотив - тёмно-красный
+        ctx.fillStyle = '#7a2020';
+        ctx.fillRect(cx, carY, c.w, carH);
+        // Маленькая труба (1 пиксель)
+        ctx.fillStyle = '#3a3a3a';
+        ctx.fillRect(cx + 2, carY - 2, 2, 2);
+        // Передний фонарь (точка)
+        ctx.fillStyle = '#ffd840';
+        ctx.fillRect(cx + 1, carY + 2, 1, 1);
+      } else {
+        // Вагон
+        ctx.fillStyle = '#3060a0';
+        ctx.fillRect(cx, carY, c.w, carH);
+        // Тонкая полоса под окнами
+        ctx.fillStyle = '#204878';
+        ctx.fillRect(cx, carY + carH - 1, c.w, 1);
+        // Окна (точки)
+        ctx.fillStyle = '#ffd860';
+        const winCount = Math.floor(c.w / 4);
+        for (let w = 0; w < winCount; w++) {
+          ctx.fillRect(cx + 1 + w * 4, carY + 1, 2, 2);
+        }
+      }
+      cx += c.w + 1;
     }
   }
 
@@ -1604,13 +2086,24 @@ document.addEventListener('click', lockOrientation, { once: true });
   function evoStageForBoss(n) {
     if (n <= 9) return n;
     if (n <= 18) return 18 - n;
-    return 0; // финальный 19-й уровень - lizard повторно
+    return 0;
+  }
+
+  // Тип босса (0..9, индекс в BOSS_TYPES) для текущего боя
+  // На пути ВВЕРХ (bossDefeated 0..9): boss type = stage (стандартный поединок)
+  // На пути ВНИЗ (bossDefeated 10..17): boss type = stage - 1 (сдвиг)
+  // bossDefeated=17 (Dinosaur stage 1) → boss type 0 = Dragon (финальный бой)
+  // После 18-й победы герой = Lizard, нового босса нет, бежит до outro
+  function bossTypeForBoss(n) {
+    if (n <= 9) return n;
+    const stage = 18 - n;
+    return Math.max(0, stage - 1);
   }
 
   function spawnBoss() {
-    // Босс соответствует стадии эволюции с зеркальным циклом
-    const bossStage = evoStageForBoss(bossDefeated);
-    const type = BOSS_TYPES[bossStage];
+    // Тип босса определяется отдельной функцией - на обратной фазе сдвиг
+    const bossType = bossTypeForBoss(bossDefeated);
+    const type = BOSS_TYPES[bossType];
     activeBoss = {
       type: type.id,
       x: W + 30,         // появляется за правым краем экрана
@@ -1672,9 +2165,10 @@ document.addEventListener('click', lockOrientation, { once: true });
           // Эволюция героя по зеркальному циклу - после 9-й стадии идёт обратно
           const oldEvo = dino.evolution;
           dino.evolution = evoStageForBoss(bossDefeated);
-          // После 18-й победы (вернулись к ящерице) - запускается финальный 19-й уровень без босса
+          // После 18-й победы (Dinosaur убил Dragon, превратился в Lizard)
+          // Ящерица бежит один уровень без босса и потом outro
           if (bossDefeated === 18) {
-            outroPendingTimer = 720; // ~12 секунд бега до outro
+            outroPendingTimer = 1800; // ~30 секунд = длительность одного уровня
             activeBoss = null;
             return;
           }
@@ -1738,30 +2232,30 @@ document.addEventListener('click', lockOrientation, { once: true });
   }
 
   function spawnObstacle(jumpStep) {
-    const canBird = score > 300;
-    const r = srand();
-    if (canBird && r < 0.2) {
-      const w = 40;
-      const heights = [GROUND_Y - 60, GROUND_Y - 40, GROUND_Y - 25];
-      obstacles.push({
-        kind: 'bird', x: obstacleSpawnX(w, jumpStep),
-        y: heights[Math.floor(srand() * heights.length)],
-        w: w, h: 28, wing: 0
-      });
-    } else {
-      const variants = [
-        { w: 16, h: 32 }, { w: 22, h: 44 }, { w: 34, h: 32 },
-        { w: 50, h: 32 }, { w: 30, h: 44 }
-      ];
-      const v = variants[Math.floor(srand() * variants.length)];
-      const spawnX = obstacleSpawnX(v.w, jumpStep);
-      const g = terrainHeight(spawnX);
-      if (g === null) return;
-      obstacles.push({
-        kind: 'cactus', x: spawnX,
-        y: g - v.h, w: v.w, h: v.h
-      });
-    }
+    const variants = [
+      { w: 16, h: 32 }, { w: 22, h: 44 }, { w: 34, h: 32 },
+      { w: 50, h: 32 }, { w: 30, h: 44 }
+    ];
+    const v = variants[Math.floor(srand() * variants.length)];
+    const spawnX = obstacleSpawnX(v.w, jumpStep);
+    const g = terrainHeight(spawnX);
+    if (g === null) return;
+    obstacles.push({
+      kind: 'cactus', x: spawnX,
+      y: g - v.h, w: v.w, h: v.h
+    });
+  }
+
+  // Спавн птеродактиля - такая же логика как у кактуса (надо ПРЫГНУТЬ через неё)
+  // Но другой звук в музыке и другой спрайт
+  function spawnBird(jumpStep) {
+    const w = 40;
+    // Птица летит на той же высоте что низкий кактус - прыгать через неё
+    const birdY = GROUND_Y - 42;
+    obstacles.push({
+      kind: 'bird', x: obstacleSpawnX(w, jumpStep),
+      y: birdY, w: w, h: 24, wing: 0
+    });
   }
 
   function spawnCloud() {
@@ -1893,17 +2387,21 @@ document.addEventListener('click', lockOrientation, { once: true });
     if (bossDefeated < 10) {
       speed += 0.0003;
     } else {
-      // На обратной фазе скорость замедляется обратно к стартовой
-      speed = Math.max(3.5, speed - 0.0003);
+      // На обратной фазе скорость замедляется обратно к стартовой 4
+      speed = Math.max(4, speed - 0.0003);
     }
     score += 0.15;
 
     // Обновление погоды
     updateWeather();
+    updateTrain();
 
     // Финальный 19-й уровень - бежим без босса до outro
     if (outroPendingTimer > 0) {
       outroPendingTimer--;
+      // За 5 сек до outro - ровная поверхность без препятствий
+      // За 6 сек до outro - 1 сек плавный переход к ровно + 5 сек ровной поверхности
+      if (outroPendingTimer === 360) flatGroundTimer = 360;
       if (outroPendingTimer === 0) {
         state = STATE.OUTRO;
         outroTimer = OUTRO_LEN;
@@ -1912,6 +2410,8 @@ document.addEventListener('click', lockOrientation, { once: true });
         return;
       }
     }
+    // Декремент таймера ровной поверхности
+    if (flatGroundTimer > 0) flatGroundTimer--;
 
     // Фолбэк: если аудио не работает - сами создаём сигналы по частоте равной музыкальной (140 BPM)
     if (!audioCtx) {
@@ -1929,12 +2429,18 @@ document.addEventListener('click', lockOrientation, { once: true });
     night = nightFactor() > 0.5;
 
     // Спавн босса на заходе солнца (0.55) или луны (~0.05) - не спавним в финальном уровне
-    if (!activeBoss && state === STATE.RUN && score > 80 && outroPendingTimer === 0) {
-      const crossedSunset = prevDayPhase < 0.55 && dayPhase >= 0.55 && dayPhase < 0.58;
-      const crossedMoonset = prevDayPhase > 0.95 && dayPhase < 0.1;
-      if (crossedSunset || crossedMoonset) spawnBoss();
-      // На заходе луны - меняем эпоху
-      if (crossedMoonset) bgStage = (bgStage + 1) % STAGE_LANDMARKS.length;
+    if (!activeBoss && state === STATE.RUN && score > 80 && outroPendingTimer === 0 && bossDefeated < 18) {
+      // Чит-таймер: после чит-кода босс спавнится через 5 сек, минуя dayPhase
+      if (cheatBossTimer > 0) {
+        cheatBossTimer--;
+        if (cheatBossTimer === 0) spawnBoss();
+      } else {
+        const crossedSunset = prevDayPhase < 0.55 && dayPhase >= 0.55 && dayPhase < 0.58;
+        const crossedMoonset = prevDayPhase > 0.95 && dayPhase < 0.1;
+        if (crossedSunset || crossedMoonset) spawnBoss();
+        // На заходе луны - меняем эпоху
+        if (crossedMoonset) bgStage = (bgStage + 1) % STAGE_LANDMARKS.length;
+      }
     }
     prevDayPhase = dayPhase;
 
@@ -2043,13 +2549,16 @@ document.addEventListener('click', lockOrientation, { once: true });
     }
 
     // Препятствия и ямы - спавн под каждый запланированный прыжок
+    // Пока flatGroundTimer > 0 (включая плавный переход) - не спавним препятствия
     if (audioCtx) {
       while (pendingJumps.length > 0) {
         const j = pendingJumps.shift();
+        if (flatGroundTimer > 0) continue;
         if (j.type === 'cactus') spawnObstacle(j.step);
         else if (j.type === 'pit') spawnPitAt(j.step);
+        else if (j.type === 'bird') spawnBird(j.step);
       }
-    } else {
+    } else if (flatGroundTimer === 0) {
       nextObstacleIn--;
       if (nextObstacleIn <= 0) {
         spawnObstacle(0);
@@ -2954,24 +3463,20 @@ document.addEventListener('click', lockOrientation, { once: true });
     }
     ctx.stroke();
 
-    // Ямы - чёрные стены до низа экрана + камни на краях
+    // Ямы - камни-силуэты на краях (без чёрных стен внутрь ямы)
     for (const pit of pits) {
       const lh = terrainHeight(pit.x - 1);
       const rh = terrainHeight(pit.x + pit.w + 1);
-      ctx.fillStyle = '#000';
-      // Левая стена ямы - тонкая полоска от поверхности до самого низа
+      ctx.fillStyle = groundLine();
+      // Камни у левого края
       if (lh !== null) {
-        ctx.fillRect(pit.x, lh, 1, H - lh);
-        // Камни-силуэты поверх края
         ctx.fillRect(pit.x - 4, lh - 3, 6, 5);
         ctx.fillRect(pit.x - 8, lh, 4, 4);
         ctx.fillRect(pit.x - 2, lh - 6, 4, 3);
         ctx.fillRect(pit.x - 6, lh + 3, 3, 3);
       }
-      // Правая стена ямы - тонкая полоска
+      // Камни у правого края
       if (rh !== null) {
-        ctx.fillRect(pit.x + pit.w - 1, rh, 1, H - rh);
-        // Камни
         ctx.fillRect(pit.x + pit.w - 2, rh - 3, 6, 5);
         ctx.fillRect(pit.x + pit.w + 4, rh, 4, 4);
         ctx.fillRect(pit.x + pit.w - 2, rh - 6, 4, 3);
@@ -3416,68 +3921,116 @@ document.addEventListener('click', lockOrientation, { once: true });
 
   // Стадия 8: Космонавт - с шлемом-аквариумом
   function drawAstronaut() {
+    // Толстый парень с обложки Fatboy Slim "You've Come a Long Way, Baby"
+    // Красная футболка с белым кругом "1", тёмные очки, короткие тёмные волосы
     const x = dino.x, y = dino.y;
     const lf = dino.legFrame;
     if (dino.ducking && dino.onGround) {
-      ctx.fillStyle = '#e0e0e8';
-      ctx.fillRect(x, y + 22, 52, 14);
+      ctx.fillStyle = '#e8b890';
+      ctx.fillRect(x + 8, y + 22, 14, 8);
+      ctx.fillStyle = '#c83030';
+      ctx.fillRect(x + 4, y + 26, 44, 10);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(x + 10, y + 24, 4, 2);
+      ctx.fillRect(x + 16, y + 24, 4, 2);
       return;
     }
-    // Шлем-стеклянный пузырь
-    ctx.fillStyle = '#e0e0e8';
-    ctx.fillRect(x + 10, y + 4, 26, 20);
-    // Стекло
-    ctx.fillStyle = '#4080c0';
-    ctx.fillRect(x + 14, y + 8, 18, 12);
-    // Блик
-    ctx.fillStyle = '#a0d0f0';
-    ctx.fillRect(x + 16, y + 10, 4, 6);
-    // Лицо за стеклом
-    ctx.fillStyle = '#c89878';
-    ctx.fillRect(x + 22, y + 12, 8, 6);
+
+    // === ГОЛОВА ===
+    ctx.fillStyle = '#e8b890';
+    ctx.fillRect(x + 14, y + 6, 20, 18);
+    // Пухлые щёки
+    ctx.fillStyle = '#d8a070';
+    ctx.fillRect(x + 13, y + 14, 3, 8);
+    ctx.fillRect(x + 32, y + 14, 3, 8);
+    // Двойной подбородок
+    ctx.fillStyle = '#d09060';
+    ctx.fillRect(x + 16, y + 22, 16, 4);
+    ctx.fillStyle = '#c88858';
+    ctx.fillRect(x + 18, y + 25, 12, 2);
+
+    // === ТЁМНЫЕ ВОЛОСЫ ===
+    ctx.fillStyle = '#2a1810';
+    ctx.fillRect(x + 13, y + 2, 22, 6);
+    ctx.fillRect(x + 15, y + 0, 18, 3);
+    ctx.fillStyle = '#1a1008';
+    ctx.fillRect(x + 14, y + 6, 20, 1);
+
+    // === БОЛЬШИЕ ТЁМНЫЕ ОЧКИ ===
     ctx.fillStyle = '#000';
-    ctx.fillRect(x + 23, y + 13, 2, 1);
-    ctx.fillRect(x + 27, y + 13, 2, 1);
-    // Антенна на шлеме
-    ctx.fillStyle = '#c0c0c8';
-    ctx.fillRect(x + 22, y, 2, 5);
-    ctx.fillStyle = '#ff4040';
-    if (frameCount % 30 < 15) {
-      ctx.fillRect(x + 21, y - 2, 4, 3);
-    }
-    // Скафандр
-    ctx.fillStyle = '#f0f0f8';
-    ctx.fillRect(x + 6, y + 22, 32, 22);
-    // Жизнеобеспечение
-    ctx.fillStyle = '#8090a0';
-    ctx.fillRect(x + 14, y + 26, 16, 8);
-    ctx.fillStyle = '#40c0ff';
-    ctx.fillRect(x + 16, y + 28, 4, 4);
-    ctx.fillStyle = '#ff8040';
-    ctx.fillRect(x + 24, y + 28, 4, 4);
-    // Флаг или нашивка
-    ctx.fillStyle = '#2050a0';
-    ctx.fillRect(x + 8, y + 24, 6, 4);
+    ctx.fillRect(x + 14, y + 10, 9, 7);
+    ctx.fillRect(x + 25, y + 10, 9, 7);
+    ctx.fillRect(x + 23, y + 12, 2, 2);
+    // Тёмные стёкла
+    ctx.fillStyle = '#202028';
+    ctx.fillRect(x + 15, y + 11, 7, 5);
+    ctx.fillRect(x + 26, y + 11, 7, 5);
+    // Блики
+    ctx.fillStyle = '#606878';
+    ctx.fillRect(x + 16, y + 11, 2, 1);
+    ctx.fillRect(x + 27, y + 11, 2, 1);
+    ctx.fillStyle = '#808898';
+    ctx.fillRect(x + 16, y + 11, 1, 1);
+    ctx.fillRect(x + 27, y + 11, 1, 1);
+
+    // === НОС ===
+    ctx.fillStyle = '#d09060';
+    ctx.fillRect(x + 23, y + 17, 3, 3);
+
+    // === РОТ ===
+    ctx.fillStyle = '#a06040';
+    ctx.fillRect(x + 20, y + 21, 8, 1);
+
+    // === ШЕЯ ===
+    ctx.fillStyle = '#e8b890';
+    ctx.fillRect(x + 18, y + 26, 12, 3);
+
+    // === КРАСНАЯ ФУТБОЛКА (поуже - 44px вместо 52px) ===
+    ctx.fillStyle = '#c83030';
+    ctx.fillRect(x + 4, y + 29, 44, 21);
+    // Тень снизу - живот свисает
+    ctx.fillStyle = '#902020';
+    ctx.fillRect(x + 6, y + 44, 40, 6);
+    // Светлые блики сверху
+    ctx.fillStyle = '#e84040';
+    ctx.fillRect(x + 8, y + 30, 36, 2);
+
+    // === БЕЛЫЙ КРУГ "1" НА ГРУДИ ===
     ctx.fillStyle = '#fff';
-    ctx.fillRect(x + 9, y + 25, 1, 1);
-    ctx.fillRect(x + 11, y + 26, 1, 1);
-    // Ноги в сапогах
-    ctx.fillStyle = '#e0e0e8';
-    if (!dino.onGround) {
-      ctx.fillRect(x + 10, y + 44, 8, 4);
-      ctx.fillRect(x + 24, y + 44, 8, 4);
-    } else {
-      ctx.fillRect(x + 10, y + 44, 8, 4);
-      ctx.fillRect(x + 24, y + 44, 8, 4);
-    }
-    ctx.fillStyle = '#8a6028';
+    ctx.fillRect(x + 19, y + 32, 14, 10);
+    ctx.fillRect(x + 17, y + 34, 18, 6);
+    ctx.fillStyle = '#c83030';
+    ctx.fillRect(x + 24, y + 34, 2, 6);
+    ctx.fillRect(x + 22, y + 34, 2, 1);
+    // Имитация мелкого текста
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(x + 18, y + 30, 8, 1);
+    ctx.fillRect(x + 17, y + 43, 6, 1);
+    ctx.fillRect(x + 24, y + 43, 8, 1);
+    ctx.fillRect(x + 18, y + 45, 6, 1);
+    ctx.fillRect(x + 25, y + 45, 7, 1);
+
+    // === РУКИ по бокам (поуже) ===
+    ctx.fillStyle = '#e8b890';
+    ctx.fillRect(x, y + 30, 6, 16);
+    ctx.fillRect(x + 46, y + 30, 6, 16);
+    ctx.fillStyle = '#d8a070';
+    ctx.fillRect(x, y + 42, 6, 4);
+    ctx.fillRect(x + 46, y + 42, 6, 4);
+
+    // === НОГИ ===
+    ctx.fillStyle = '#3a2818';
     if (lf === 0) {
-      ctx.fillRect(x + 8, y + 46, 12, 2);
-      ctx.fillRect(x + 22, y + 46, 12, 2);
+      ctx.fillRect(x + 14, y + 50, 10, 2);
+      ctx.fillRect(x + 28, y + 48, 10, 4);
     } else {
-      ctx.fillRect(x + 8, y + 46, 12, 2);
-      ctx.fillRect(x + 22, y + 46, 12, 2);
+      ctx.fillRect(x + 14, y + 48, 10, 4);
+      ctx.fillRect(x + 28, y + 50, 10, 2);
     }
+    // Белые кроссовки
+    ctx.fillStyle = '#f0f0f0';
+    ctx.fillRect(x + 12, y + 51, 12, 1);
+    ctx.fillRect(x + 28, y + 51, 12, 1);
   }
 
   // Стадия 9: Киборг - человек будущего с имплантами
@@ -3973,9 +4526,16 @@ document.addEventListener('click', lockOrientation, { once: true });
       sx = (b.flinch % 4 < 2) ? -3 : 3;
       sy = (b.flinch % 3 === 0) ? -1 : 0;
     }
+    const innerW = b.w / 1.2;
     ctx.save();
-    // Спрайт всегда смотрит влево, не разворачивается при смене направления
     ctx.translate(b.x + sx, yy + sy);
+    ctx.scale(1.2, 1.2);
+    // Дракон нарисован в профиль смотрящим влево, отзеркаливаем чтобы смотрел вправо
+    // Остальные боссы анфас - оставляем как есть
+    if (b.type === 'dragon') {
+      ctx.translate(innerW, 0);
+      ctx.scale(-1, 1);
+    }
     switch (b.type) {
       case 'dragon':     drawBossDragon(b); break;
       case 'yeti':       drawBossYeti(b); break;
@@ -3993,469 +4553,1488 @@ document.addEventListener('click', lockOrientation, { once: true });
 
   // Дракон - красный с крыльями, рогами, длинной шеей
   function drawBossDragon(b) {
+    // Дракон в профиль, смотрит влево (на dino)
+    // Bounding box 90x80
     const c = b.color, cl = b.light, cd = b.dark;
-    // Крылья растопыренные
-    ctx.fillStyle = cd;
-    ctx.fillRect(0, 10, 18, 4);
-    ctx.fillRect(0, 14, 22, 5);
-    ctx.fillRect(0, 19, 16, 5);
-    ctx.fillRect(72, 10, 18, 4);
-    ctx.fillRect(68, 14, 22, 5);
-    ctx.fillRect(74, 19, 16, 5);
-    // Тело
-    ctx.fillStyle = c;
-    ctx.fillRect(20, 28, 50, 36);
-    ctx.fillStyle = cl;
-    ctx.fillRect(24, 38, 42, 22);
-    // Длинная шея изогнутая вверх
-    ctx.fillStyle = c;
-    ctx.fillRect(50, 20, 10, 14);
-    ctx.fillRect(58, 10, 14, 16);
-    // Голова
-    ctx.fillRect(60, 4, 22, 14);
-    // Рога
-    ctx.fillStyle = '#f5e9c0';
-    ctx.fillRect(62, 0, 3, 6);
-    ctx.fillRect(78, 0, 3, 6);
-    // Глаз светящийся
-    ctx.fillStyle = '#ffff40';
-    ctx.fillRect(72, 8, 4, 3);
-    ctx.fillStyle = '#000';
-    ctx.fillRect(73, 9, 2, 2);
-    // Пасть с клыками
-    ctx.fillStyle = cd;
-    ctx.fillRect(62, 14, 16, 3);
-    ctx.fillStyle = '#f5e8c0';
-    ctx.fillRect(64, 14, 2, 3);
-    ctx.fillRect(72, 14, 2, 3);
-    // Шипы вдоль спины
-    ctx.fillStyle = cd;
-    ctx.fillRect(28, 24, 3, 5);
-    ctx.fillRect(38, 23, 3, 6);
-    ctx.fillRect(48, 25, 3, 4);
-    // Лапы
-    ctx.fillStyle = cd;
     const lf = b.legFrame;
-    ctx.fillRect(24, 64, 10, lf === 0 ? 14 : 10);
-    ctx.fillRect(56, 64, 10, lf === 0 ? 10 : 14);
+
+    // ХВОСТ - справа сзади, изогнутый
+    ctx.fillStyle = c;
+    ctx.fillRect(72, 38, 14, 8);
+    ctx.fillRect(80, 32, 8, 8);
+    ctx.fillRect(82, 26, 6, 8);
+    ctx.fillStyle = cd;
+    // Шипастый кончик
+    ctx.fillRect(86, 22, 4, 4);
+    ctx.fillRect(88, 26, 2, 2);
+
+    // КРЫЛЬЯ - развёрнутые позади тела
+    // Дальнее крыло (за телом, в перспективе)
+    ctx.fillStyle = '#2a0608';
+    ctx.fillRect(28, 6, 36, 4);
+    ctx.fillRect(26, 10, 40, 5);
+    ctx.fillRect(28, 15, 36, 5);
+    ctx.fillRect(34, 20, 26, 4);
+    // Косточки дальнего крыла
+    ctx.fillStyle = cd;
+    ctx.fillRect(34, 8, 1, 14);
+    ctx.fillRect(42, 8, 1, 14);
+    ctx.fillRect(50, 8, 1, 14);
+    ctx.fillRect(58, 8, 1, 14);
+
+    // ТЕЛО - овальное по центру-низу
+    ctx.fillStyle = c;
+    ctx.fillRect(28, 36, 48, 28);
+    // Брюхо светлое
+    ctx.fillStyle = cl;
+    ctx.fillRect(32, 46, 40, 16);
+    // Тёмная тень снизу
+    ctx.fillStyle = cd;
+    ctx.fillRect(28, 60, 48, 4);
+    // Чешуя - точки на спине
+    ctx.fillStyle = cd;
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 4; col++) {
+        ctx.fillRect(34 + col * 10, 38 + row * 4, 6, 1);
+      }
+    }
+    // Грудные мышцы
+    ctx.fillStyle = '#a02828';
+    ctx.fillRect(30, 40, 8, 12);
+
+    // ШИПЫ ВДОЛЬ СПИНЫ
+    ctx.fillStyle = cd;
+    ctx.fillRect(34, 30, 4, 8);
+    ctx.fillRect(44, 28, 4, 10);
+    ctx.fillRect(54, 28, 4, 10);
+    ctx.fillRect(64, 30, 4, 8);
+    // Светлые блики
+    ctx.fillStyle = cl;
+    ctx.fillRect(35, 32, 1, 5);
+    ctx.fillRect(45, 30, 1, 7);
+    ctx.fillRect(55, 30, 1, 7);
+    ctx.fillRect(65, 32, 1, 5);
+
+    // ЛАПЫ - две передних, две задних
+    ctx.fillStyle = c;
+    // Передние (ближе к dino, слева)
+    ctx.fillRect(26, 60, 10, lf === 0 ? 18 : 14);
+    ctx.fillRect(38, 60, 10, lf === 0 ? 14 : 18);
+    // Задние
+    ctx.fillRect(56, 60, 10, lf === 0 ? 14 : 18);
+    ctx.fillRect(66, 60, 10, lf === 0 ? 18 : 14);
+    // Когти на стопах
+    ctx.fillStyle = '#f5e9c0';
+    const lh1 = lf === 0 ? 18 : 14;
+    const lh2 = lf === 0 ? 14 : 18;
+    ctx.fillRect(26, 60 + lh1 - 2, 3, 3);
+    ctx.fillRect(30, 60 + lh1 - 2, 3, 3);
+    ctx.fillRect(33, 60 + lh1 - 2, 3, 3);
+    ctx.fillRect(38, 60 + lh2 - 2, 3, 3);
+    ctx.fillRect(42, 60 + lh2 - 2, 3, 3);
+    ctx.fillRect(45, 60 + lh2 - 2, 3, 3);
+    ctx.fillRect(56, 60 + lh2 - 2, 3, 3);
+    ctx.fillRect(60, 60 + lh2 - 2, 3, 3);
+    ctx.fillRect(63, 60 + lh2 - 2, 3, 3);
+    ctx.fillRect(66, 60 + lh1 - 2, 3, 3);
+    ctx.fillRect(70, 60 + lh1 - 2, 3, 3);
+    ctx.fillRect(73, 60 + lh1 - 2, 3, 3);
+
+    // ШЕЯ - изогнутая вверх-влево к голове
+    ctx.fillStyle = c;
+    ctx.fillRect(20, 28, 14, 12);
+    ctx.fillRect(14, 18, 14, 14);
+    // Чешуя на шее
+    ctx.fillStyle = cd;
+    ctx.fillRect(22, 30, 1, 8);
+    ctx.fillRect(26, 32, 1, 6);
+    ctx.fillRect(16, 22, 1, 8);
+    ctx.fillRect(22, 22, 1, 6);
+
+    // ГОЛОВА - в профиль, смотрит влево
+    // Череп
+    ctx.fillStyle = c;
+    ctx.fillRect(0, 8, 22, 16);
+    // Удлинённая морда вперёд (влево)
+    ctx.fillRect(0, 14, 8, 8);
+    // Светлая нижняя челюсть
+    ctx.fillStyle = cl;
+    ctx.fillRect(0, 18, 22, 6);
+    // Нос-кончик
+    ctx.fillStyle = cd;
+    ctx.fillRect(0, 14, 4, 2);
+
+    // РОГА - изогнутые назад
+    ctx.fillStyle = '#f5e9c0';
+    // Большой рог
+    ctx.fillRect(14, 0, 4, 10);
+    ctx.fillRect(18, 2, 4, 6);
+    ctx.fillRect(20, 4, 4, 4);
+    // Малый рог сзади
+    ctx.fillRect(8, 2, 3, 8);
+    // Тёмные кольца на рогах
+    ctx.fillStyle = '#a08850';
+    ctx.fillRect(14, 4, 4, 1);
+    ctx.fillRect(14, 7, 4, 1);
+    ctx.fillRect(8, 5, 3, 1);
+
+    // ГЛАЗ - один (профиль)
+    ctx.fillStyle = '#1a0a04';
+    ctx.fillRect(8, 11, 7, 5);
+    ctx.fillStyle = '#ffff40';
+    ctx.fillRect(9, 12, 5, 3);
+    ctx.fillStyle = '#ff8000';
+    ctx.fillRect(10, 12, 3, 3);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(10, 13, 2, 2);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(10, 13, 1, 1);
+
+    // БРОВЬ - агрессивная
+    ctx.fillStyle = cd;
+    ctx.fillRect(7, 9, 9, 2);
+
+    // ПАСТЬ - открытая с клыками
+    ctx.fillStyle = '#1a0608';
+    ctx.fillRect(0, 16, 18, 4);
+    // Верхние клыки
+    ctx.fillStyle = '#f5e8c0';
+    ctx.fillRect(2, 16, 2, 5);
+    ctx.fillRect(6, 16, 2, 4);
+    ctx.fillRect(10, 16, 2, 4);
+    ctx.fillRect(14, 16, 2, 5);
+    // Нижние клыки
+    ctx.fillRect(4, 19, 2, 3);
+    ctx.fillRect(12, 19, 2, 3);
+    // Язык
+    ctx.fillStyle = '#c83040';
+    ctx.fillRect(2, 19, 8, 2);
+
+    // НОЗДРЯ
+    ctx.fillStyle = cd;
+    ctx.fillRect(2, 13, 2, 1);
+
+    // ОГОНЬКИ ИЗ ПАСТИ - дыхание
+    if ((b.bobPhase * 10 | 0) % 4 === 0) {
+      ctx.fillStyle = '#ff8030';
+      ctx.fillRect(-3, 18, 3, 2);
+      ctx.fillStyle = '#ffff40';
+      ctx.fillRect(-2, 18, 1, 2);
+    }
   }
 
   // Йети - белый гигант
   function drawBossYeti(b) {
     const c = b.color, cl = b.light, cd = b.dark;
+    const lf = b.legFrame;
+
+    // Клочья шерсти по контуру головы
     ctx.fillStyle = cd;
-    // Клочья шерсти по контуру
-    for (let i = 0; i < 6; i++) ctx.fillRect(8 + i * 11, 12, 3, 4);
-    // Тело
+    for (let i = 0; i < 7; i++) ctx.fillRect(6 + i * 10, 4, 4, 6);
+    for (let i = 0; i < 5; i++) ctx.fillRect(8 + i * 14, 28, 5, 4);
+
+    // Массивное тело с шерстью
     ctx.fillStyle = c;
-    ctx.fillRect(10, 20, 60, 50);
+    ctx.fillRect(8, 22, 64, 52);
+    // Светлая центральная часть - грудь/живот
     ctx.fillStyle = cl;
-    ctx.fillRect(18, 34, 44, 30);
-    // Голова
+    ctx.fillRect(16, 36, 48, 32);
+
+    // Текстура шерсти - вертикальные штрихи
+    ctx.fillStyle = '#a8c0d0';
+    for (let row = 0; row < 6; row++) {
+      for (let col = 0; col < 8; col++) {
+        if ((row + col) % 2 === 0) ctx.fillRect(10 + col * 8, 24 + row * 8, 1, 4);
+      }
+    }
+    // Ребра/мускулы груди
+    ctx.fillStyle = cd;
+    ctx.fillRect(20, 38, 40, 1);
+    ctx.fillRect(22, 44, 36, 1);
+    ctx.fillRect(24, 50, 32, 1);
+
+    // Огромная голова приплюснутая
     ctx.fillStyle = c;
-    ctx.fillRect(20, 4, 40, 26);
+    ctx.fillRect(16, 0, 48, 30);
+    // Темя - тень
+    ctx.fillStyle = cd;
+    ctx.fillRect(18, 0, 44, 4);
+    ctx.fillRect(16, 26, 48, 4);
+
+    // Брови мохнатые, нависающие
+    ctx.fillStyle = cd;
+    ctx.fillRect(22, 10, 14, 4);
+    ctx.fillRect(44, 10, 14, 4);
+    ctx.fillStyle = '#3a4858';
+    ctx.fillRect(22, 14, 14, 2);
+    ctx.fillRect(44, 14, 14, 2);
+
     // Тёмные глаза с красным свечением
     ctx.fillStyle = '#ff3030';
-    ctx.fillRect(28, 14, 6, 6);
-    ctx.fillRect(46, 14, 6, 6);
+    ctx.fillRect(26, 16, 7, 6);
+    ctx.fillRect(47, 16, 7, 6);
     ctx.fillStyle = '#000';
-    ctx.fillRect(30, 16, 3, 3);
-    ctx.fillRect(48, 16, 3, 3);
-    // Клыки вниз из пасти
+    ctx.fillRect(28, 17, 4, 4);
+    ctx.fillRect(49, 17, 4, 4);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(29, 18, 1, 1);
+    ctx.fillRect(50, 18, 1, 1);
+
+    // Нос - кнопка
+    ctx.fillStyle = '#1a2030';
+    ctx.fillRect(38, 18, 4, 4);
+
+    // Открытая рычащая пасть
+    ctx.fillStyle = '#1a0608';
+    ctx.fillRect(24, 22, 32, 6);
+    // Клыки сверху
     ctx.fillStyle = '#f5e8c0';
-    ctx.fillRect(28, 24, 3, 6);
-    ctx.fillRect(48, 24, 3, 6);
-    // Рот
-    ctx.fillStyle = cd;
-    ctx.fillRect(26, 22, 28, 4);
-    // Огромные руки
+    ctx.fillRect(28, 22, 3, 6);
+    ctx.fillRect(34, 22, 2, 4);
+    ctx.fillRect(44, 22, 2, 4);
+    ctx.fillRect(49, 22, 3, 6);
+    // Язык
+    ctx.fillStyle = '#c83040';
+    ctx.fillRect(34, 25, 12, 3);
+
+    // Огромные руки с мускулами
     ctx.fillStyle = c;
-    ctx.fillRect(-4, 28, 14, 32);
-    ctx.fillRect(70, 28, 14, 32);
-    // Когти
+    ctx.fillRect(-6, 26, 16, 38);
+    ctx.fillRect(70, 26, 16, 38);
+    // Тень мышц
+    ctx.fillStyle = '#a8c0d0';
+    ctx.fillRect(-4, 32, 4, 8);
+    ctx.fillRect(-4, 46, 4, 8);
+    ctx.fillRect(76, 32, 4, 8);
+    ctx.fillRect(76, 46, 4, 8);
+
+    // Кисти большие
+    ctx.fillStyle = cl;
+    ctx.fillRect(-8, 60, 18, 10);
+    ctx.fillRect(70, 60, 18, 10);
+    // Когти острые
+    ctx.fillStyle = '#1a1a22';
+    ctx.fillRect(-8, 68, 3, 5);
+    ctx.fillRect(-3, 68, 3, 5);
+    ctx.fillRect(2, 68, 3, 5);
+    ctx.fillRect(7, 68, 3, 5);
+    ctx.fillRect(70, 68, 3, 5);
+    ctx.fillRect(75, 68, 3, 5);
+    ctx.fillRect(80, 68, 3, 5);
+    ctx.fillRect(85, 68, 3, 5);
+
+    // Ноги с шерстью
+    ctx.fillStyle = c;
+    ctx.fillRect(14, 68, 18, lf === 0 ? 16 : 14);
+    ctx.fillRect(48, 68, 18, lf === 0 ? 14 : 16);
+    // Стопы тёмные
     ctx.fillStyle = cd;
-    ctx.fillRect(-2, 58, 2, 5);
-    ctx.fillRect(2, 58, 2, 5);
-    ctx.fillRect(6, 58, 2, 5);
-    ctx.fillRect(72, 58, 2, 5);
-    ctx.fillRect(76, 58, 2, 5);
-    ctx.fillRect(80, 58, 2, 5);
-    // Ноги
-    ctx.fillStyle = cd;
-    ctx.fillRect(18, 70, 16, 15);
-    ctx.fillRect(46, 70, 16, 15);
+    ctx.fillRect(12, 80, 20, 4);
+    ctx.fillRect(46, 80, 20, 4);
   }
 
   // Циклоп - один огромный глаз
   function drawBossCyclops(b) {
     const c = b.color, cl = b.light, cd = b.dark;
-    // Тело
+    const lf = b.legFrame;
+
+    // Тело массивное с ремнём
     ctx.fillStyle = c;
-    ctx.fillRect(8, 30, 60, 40);
+    ctx.fillRect(8, 30, 60, 42);
     ctx.fillStyle = cl;
     ctx.fillRect(14, 40, 48, 26);
-    // Огромная круглая голова
+    // Ремень кожаный
+    ctx.fillStyle = '#3a2010';
+    ctx.fillRect(8, 56, 60, 5);
+    ctx.fillStyle = '#806040';
+    ctx.fillRect(34, 56, 8, 5);
+    ctx.fillStyle = '#f5e9c0';
+    ctx.fillRect(36, 57, 4, 3);
+    // Тень мышц на торсе
+    ctx.fillStyle = cd;
+    ctx.fillRect(20, 32, 36, 1);
+    ctx.fillRect(24, 36, 28, 1);
+    ctx.fillRect(20, 64, 36, 1);
+
+    // Огромная круглая голова с шрамом
     ctx.fillStyle = c;
-    ctx.fillRect(14, 2, 48, 30);
-    // Один огромный глаз
+    ctx.fillRect(12, 0, 52, 32);
+    // Тень верхушки
+    ctx.fillStyle = cd;
+    ctx.fillRect(14, 0, 48, 4);
+    // Шрам через лоб
+    ctx.fillStyle = '#6a4818';
+    ctx.fillRect(20, 6, 16, 2);
+    ctx.fillRect(22, 4, 12, 2);
+
+    // Бровь нависающая над глазом
+    ctx.fillStyle = cd;
+    ctx.fillRect(20, 9, 36, 4);
+    ctx.fillStyle = '#3a2810';
+    ctx.fillRect(22, 13, 32, 1);
+
+    // Один огромный глаз - детальный
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(20, 14, 36, 14);
     ctx.fillStyle = '#fff0a0';
-    ctx.fillRect(22, 10, 32, 16);
-    ctx.fillStyle = '#ff2020';
-    ctx.fillRect(30, 12, 16, 12);
+    ctx.fillRect(22, 15, 32, 12);
+    // Радужка
+    ctx.fillStyle = '#ff4020';
+    ctx.fillRect(28, 16, 20, 10);
+    ctx.fillStyle = '#a02000';
+    ctx.fillRect(30, 17, 16, 8);
+    // Зрачок
     ctx.fillStyle = '#000';
-    ctx.fillRect(34, 14, 8, 8);
+    ctx.fillRect(34, 19, 8, 4);
+    // Блик
     ctx.fillStyle = '#fff';
-    ctx.fillRect(35, 15, 2, 2);
-    // Зубастый рот
+    ctx.fillRect(35, 19, 2, 2);
+    // Ресницы сверху
     ctx.fillStyle = cd;
-    ctx.fillRect(18, 26, 40, 6);
+    for (let i = 0; i < 6; i++) ctx.fillRect(22 + i * 5, 13, 2, 2);
+
+    // Нос плоский
+    ctx.fillStyle = cd;
+    ctx.fillRect(34, 28, 8, 2);
+
+    // Зубастый рот - оскал
+    ctx.fillStyle = '#1a0808';
+    ctx.fillRect(16, 30, 44, 8);
+    // Зубы кривые
     ctx.fillStyle = '#f5e8c0';
-    for (let i = 0; i < 5; i++) ctx.fillRect(20 + i * 8, 26, 3, 5);
-    // Дубина в руке
-    ctx.fillStyle = cd;
-    ctx.fillRect(65, 35, 8, 40);
-    ctx.fillRect(70, 30, 12, 14);
-    // Руки
+    ctx.fillRect(18, 30, 4, 7);
+    ctx.fillRect(24, 30, 3, 6);
+    ctx.fillRect(30, 30, 4, 8);
+    ctx.fillRect(38, 30, 3, 7);
+    ctx.fillRect(44, 30, 4, 6);
+    ctx.fillRect(50, 30, 4, 7);
+    ctx.fillRect(56, 30, 3, 6);
+
+    // Дубина с шипами в правой руке
+    ctx.fillStyle = '#3a2010';
+    ctx.fillRect(68, 38, 9, 44);
+    // Утолщение дубины
+    ctx.fillStyle = '#5a3018';
+    ctx.fillRect(64, 30, 18, 16);
+    ctx.fillStyle = '#3a2010';
+    // Шипы на дубине
+    ctx.fillRect(60, 32, 4, 4);
+    ctx.fillRect(82, 32, 4, 4);
+    ctx.fillRect(62, 38, 4, 4);
+    ctx.fillRect(80, 40, 4, 4);
+    // Деревянная текстура
+    ctx.fillStyle = '#1a0a04';
+    ctx.fillRect(70, 50, 5, 1);
+    ctx.fillRect(70, 60, 5, 1);
+    ctx.fillRect(70, 70, 5, 1);
+
+    // Руки массивные
     ctx.fillStyle = c;
-    ctx.fillRect(0, 32, 12, 30);
-    ctx.fillRect(63, 34, 8, 24);
-    // Ноги
+    ctx.fillRect(0, 30, 12, 36);
+    ctx.fillRect(63, 32, 9, 28);
+    // Тень мышц рук
     ctx.fillStyle = cd;
-    ctx.fillRect(16, 70, 14, 20);
-    ctx.fillRect(46, 70, 14, 20);
+    ctx.fillRect(2, 36, 8, 1);
+    ctx.fillRect(2, 48, 8, 1);
+
+    // Кисть левой руки сжатый кулак
+    ctx.fillStyle = cl;
+    ctx.fillRect(-2, 60, 14, 12);
+    ctx.fillStyle = cd;
+    ctx.fillRect(-2, 60, 14, 1);
+    ctx.fillRect(-2, 64, 14, 1);
+
+    // Ноги с гетрами
+    ctx.fillStyle = c;
+    ctx.fillRect(14, 70, 18, lf === 0 ? 18 : 14);
+    ctx.fillRect(44, 70, 18, lf === 0 ? 14 : 18);
+    // Гетры/обмотки
+    ctx.fillStyle = cd;
+    ctx.fillRect(14, 76, 18, 2);
+    ctx.fillRect(14, 80, 18, 2);
+    ctx.fillRect(44, 76, 18, 2);
+    ctx.fillRect(44, 80, 18, 2);
+    // Стопы
+    ctx.fillStyle = '#3a2010';
+    ctx.fillRect(12, 86, 22, 4);
+    ctx.fillRect(42, 86, 22, 4);
   }
 
   // Паук-королева - 8 ног
   function drawBossSpider(b) {
     const c = b.color, cl = b.light, cd = b.dark;
-    // 8 длинных ног
-    ctx.fillStyle = cd;
+    const lf = b.legFrame;
+
+    // 8 длинных сегментированных ног с волосками
     for (let side = 0; side < 2; side++) {
-      const xs = side === 0 ? -5 : 75;
+      const xs = side === 0 ? 18 : 60;
       const d = side === 0 ? -1 : 1;
       for (let i = 0; i < 4; i++) {
-        const off = i * 2 + b.legFrame * (i % 2 === 0 ? 2 : -2);
-        ctx.fillRect(xs + d * (i * 3), 25 + off, 3, 22);
-        ctx.fillRect(xs - d * 5 + d * (i * 3), 43 + off, 5, 3);
+        const angle = i - 1.5;
+        const legPhase = (lf + i) % 2;
+        const offY = legPhase === 0 ? 0 : -2;
+        // Бедро
+        ctx.fillStyle = cd;
+        const hipX = xs;
+        const hipY = 28 + i * 4;
+        const k1x = xs + d * (10 + i * 2);
+        const k1y = hipY - 4 + offY;
+        // Сегмент 1: от тела к колену
+        for (let s = 0; s < 6; s++) {
+          ctx.fillRect(hipX + (k1x - hipX) * s / 6, hipY + (k1y - hipY) * s / 6, 4, 3);
+        }
+        // Сегмент 2: от колена вниз - голень с волосками
+        const k2x = xs + d * (16 + i * 3);
+        const k2y = k1y + 24;
+        for (let s = 0; s < 8; s++) {
+          ctx.fillRect(k1x + (k2x - k1x) * s / 8, k1y + (k2y - k1y) * s / 8, 3, 4);
+        }
+        // Волоски на ноге
+        ctx.fillStyle = '#1a0820';
+        for (let h = 0; h < 4; h++) {
+          ctx.fillRect(k1x + (k2x - k1x) * h / 4 + d, k1y + (k2y - k1y) * h / 4 - 1, 1, 2);
+        }
+        // Коготь на конце ноги
+        ctx.fillStyle = '#080010';
+        ctx.fillRect(k2x - 1, k2y, 4, 3);
       }
     }
-    // Основное тело
+
+    // Брюшко - круглое тело
     ctx.fillStyle = c;
-    ctx.fillRect(20, 20, 55, 30);
-    ctx.fillStyle = cl;
-    // Узор на спине
-    ctx.fillRect(30, 26, 10, 10);
-    ctx.fillRect(45, 30, 15, 8);
-    // Голова-передняя часть
-    ctx.fillStyle = c;
-    ctx.fillRect(18, 24, 16, 20);
-    // Множество глаз
-    ctx.fillStyle = '#ff2020';
-    ctx.fillRect(20, 26, 3, 3);
-    ctx.fillRect(20, 32, 3, 3);
-    ctx.fillRect(25, 28, 3, 3);
-    ctx.fillRect(25, 36, 3, 3);
-    // Хелицеры
+    ctx.fillRect(15, 18, 65, 32);
+    // Тень внизу брюшка
     ctx.fillStyle = cd;
-    ctx.fillRect(14, 40, 6, 8);
-    ctx.fillRect(22, 40, 6, 8);
+    ctx.fillRect(15, 44, 65, 6);
+    ctx.fillRect(15, 18, 65, 3);
+
+    // Узор-хищник на спине - череп паука
+    ctx.fillStyle = cl;
+    ctx.fillRect(36, 24, 18, 12);
+    // Глазницы черепа
+    ctx.fillStyle = cd;
+    ctx.fillRect(38, 26, 4, 4);
+    ctx.fillRect(48, 26, 4, 4);
+    // Челюсти черепа
+    ctx.fillRect(40, 32, 2, 3);
+    ctx.fillRect(44, 32, 2, 3);
+    ctx.fillRect(48, 32, 2, 3);
+
+    // Узоры по бокам
+    ctx.fillStyle = cl;
+    ctx.fillRect(20, 30, 8, 6);
+    ctx.fillRect(60, 30, 8, 6);
+    ctx.fillStyle = cd;
+    ctx.fillRect(22, 32, 4, 2);
+    ctx.fillRect(62, 32, 4, 2);
+
+    // Голова - передняя круглая часть
+    ctx.fillStyle = c;
+    ctx.fillRect(0, 22, 22, 26);
+    // Тень головы
+    ctx.fillStyle = cd;
+    ctx.fillRect(0, 22, 22, 3);
+    ctx.fillRect(0, 44, 22, 4);
+
+    // 8 глаз - 2 ряда по 4
+    ctx.fillStyle = '#1a0420';
+    ctx.fillRect(2, 26, 18, 14);
+    // Главные глаза - крупные красные
+    ctx.fillStyle = '#ff2020';
+    ctx.fillRect(4, 28, 5, 5);
+    ctx.fillRect(11, 28, 5, 5);
+    ctx.fillStyle = '#a00010';
+    ctx.fillRect(5, 29, 3, 3);
+    ctx.fillRect(12, 29, 3, 3);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(5, 29, 1, 1);
+    ctx.fillRect(12, 29, 1, 1);
+    // Малые глаза - оранжевые
+    ctx.fillStyle = '#ff8030';
+    ctx.fillRect(3, 35, 3, 3);
+    ctx.fillRect(8, 35, 3, 3);
+    ctx.fillRect(13, 35, 3, 3);
+    ctx.fillRect(18, 35, 3, 3);
+
+    // Хелицеры (челюсти) с клыками - передние
+    ctx.fillStyle = cd;
+    ctx.fillRect(-4, 38, 10, 12);
+    ctx.fillRect(8, 38, 10, 12);
+    // Клыки острые
+    ctx.fillStyle = '#1a0820';
+    ctx.fillRect(-3, 50, 4, 6);
+    ctx.fillRect(11, 50, 4, 6);
+    // Кончики клыков - блестящие
     ctx.fillStyle = '#f5e8c0';
-    ctx.fillRect(14, 44, 2, 4);
-    ctx.fillRect(24, 44, 2, 4);
+    ctx.fillRect(-3, 54, 2, 3);
+    ctx.fillRect(11, 54, 2, 3);
+
+    // Капля яда на одном клыке
+    ctx.fillStyle = '#80ff20';
+    ctx.fillRect(-2, 57, 2, 2);
   }
 
   // Минотавр - бык с рогами и топором
   function drawBossMinotaur(b) {
     const c = b.color, cl = b.light, cd = b.dark;
-    // Огромные рога
+    const lf = b.legFrame;
+
+    // Огромные изогнутые рога
     ctx.fillStyle = '#f5e9c0';
-    ctx.fillRect(12, 6, 4, 10);
-    ctx.fillRect(6, 10, 8, 4);
-    ctx.fillRect(63, 6, 4, 10);
-    ctx.fillRect(64, 10, 8, 4);
-    // Голова быка
+    ctx.fillRect(8, 4, 6, 12);
+    ctx.fillRect(2, 8, 8, 6);
+    ctx.fillRect(0, 12, 6, 4);
+    ctx.fillRect(66, 4, 6, 12);
+    ctx.fillRect(70, 8, 8, 6);
+    ctx.fillRect(74, 12, 6, 4);
+    // Тёмные кольца на рогах
+    ctx.fillStyle = '#a08850';
+    ctx.fillRect(8, 8, 6, 1);
+    ctx.fillRect(8, 12, 6, 1);
+    ctx.fillRect(66, 8, 6, 1);
+    ctx.fillRect(66, 12, 6, 1);
+    // Кончики рогов острые
+    ctx.fillStyle = '#806840';
+    ctx.fillRect(0, 12, 2, 4);
+    ctx.fillRect(78, 12, 2, 4);
+
+    // Голова быка с шерстью
     ctx.fillStyle = c;
-    ctx.fillRect(18, 4, 50, 24);
+    ctx.fillRect(14, 2, 56, 28);
+    // Лоб шерсть
     ctx.fillStyle = cd;
-    ctx.fillRect(30, 22, 26, 6);
-    // Морда
-    ctx.fillRect(36, 14, 4, 3);
-    ctx.fillRect(46, 14, 4, 3);
-    // Красные глаза
-    ctx.fillStyle = '#ff4040';
-    ctx.fillRect(28, 12, 5, 4);
-    ctx.fillRect(52, 12, 5, 4);
-    ctx.fillStyle = '#000';
-    ctx.fillRect(29, 13, 2, 2);
-    ctx.fillRect(53, 13, 2, 2);
-    // Кольцо в носу
-    ctx.fillStyle = '#d4b040';
-    ctx.fillRect(40, 24, 6, 3);
-    // Мускулистое тело
-    ctx.fillStyle = c;
-    ctx.fillRect(14, 30, 58, 40);
+    for (let i = 0; i < 7; i++) ctx.fillRect(16 + i * 8, 2, 4, 4);
+
+    // Морда удлинённая
     ctx.fillStyle = cl;
-    ctx.fillRect(22, 38, 42, 26);
-    // Топор в руке
+    ctx.fillRect(28, 18, 28, 14);
+    // Тёмные ноздри
     ctx.fillStyle = cd;
-    ctx.fillRect(73, 30, 4, 40);
-    ctx.fillStyle = '#a0a0b0';
-    ctx.fillRect(70, 28, 14, 16);
-    ctx.fillStyle = '#d0d0e0';
-    ctx.fillRect(70, 28, 14, 3);
-    // Ноги копыта
-    ctx.fillStyle = c;
-    ctx.fillRect(18, 70, 16, 10);
-    ctx.fillRect(52, 70, 16, 10);
+    ctx.fillRect(34, 22, 5, 4);
+    ctx.fillRect(45, 22, 5, 4);
+
+    // Брови нависающие
+    ctx.fillStyle = cd;
+    ctx.fillRect(20, 8, 12, 4);
+    ctx.fillRect(52, 8, 12, 4);
+
+    // Красные горящие глаза
+    ctx.fillStyle = '#fff080';
+    ctx.fillRect(22, 12, 8, 6);
+    ctx.fillRect(54, 12, 8, 6);
+    ctx.fillStyle = '#ff4040';
+    ctx.fillRect(24, 13, 5, 4);
+    ctx.fillRect(56, 13, 5, 4);
     ctx.fillStyle = '#000';
-    ctx.fillRect(18, 78, 16, 4);
-    ctx.fillRect(52, 78, 16, 4);
+    ctx.fillRect(26, 14, 3, 3);
+    ctx.fillRect(58, 14, 3, 3);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(27, 14, 1, 1);
+    ctx.fillRect(59, 14, 1, 1);
+
+    // Открытая пасть с клыками и языком
+    ctx.fillStyle = '#1a0808';
+    ctx.fillRect(28, 26, 28, 6);
+    ctx.fillStyle = '#f5e8c0';
+    // Клыки
+    ctx.fillRect(30, 26, 3, 6);
+    ctx.fillRect(36, 26, 2, 5);
+    ctx.fillRect(46, 26, 2, 5);
+    ctx.fillRect(52, 26, 3, 6);
+    // Язык
+    ctx.fillStyle = '#c83040';
+    ctx.fillRect(38, 28, 8, 3);
+
+    // Кольцо в носу с цепочкой
+    ctx.fillStyle = '#d4b040';
+    ctx.fillRect(38, 32, 8, 4);
+    ctx.fillStyle = '#a08020';
+    ctx.fillRect(40, 34, 4, 2);
+    // Цепочка вниз
+    ctx.fillStyle = '#806818';
+    ctx.fillRect(40, 36, 1, 2);
+    ctx.fillRect(43, 36, 1, 2);
+
+    // Шея массивная
+    ctx.fillStyle = c;
+    ctx.fillRect(20, 30, 44, 8);
+
+    // Мускулистое тело с шерстью
+    ctx.fillStyle = c;
+    ctx.fillRect(12, 36, 60, 38);
+    // Грудь светлее
+    ctx.fillStyle = cl;
+    ctx.fillRect(20, 44, 44, 26);
+    // Грудные мышцы
+    ctx.fillStyle = cd;
+    ctx.fillRect(22, 46, 18, 1);
+    ctx.fillRect(44, 46, 18, 1);
+    ctx.fillRect(20, 56, 44, 1);
+    ctx.fillRect(20, 62, 44, 1);
+
+    // Кубики пресса
+    ctx.fillStyle = '#5a3018';
+    for (let i = 0; i < 3; i++) {
+      ctx.fillRect(28 + i * 10, 60, 8, 1);
+    }
+
+    // Ремень с черепом
+    ctx.fillStyle = '#3a2010';
+    ctx.fillRect(12, 66, 60, 5);
+    // Череп на пряжке
+    ctx.fillStyle = '#f5e9c0';
+    ctx.fillRect(36, 66, 12, 6);
+    ctx.fillStyle = cd;
+    ctx.fillRect(38, 68, 2, 2);
+    ctx.fillRect(44, 68, 2, 2);
+
+    // Топор двусторонний в руке
+    ctx.fillStyle = '#3a2010';
+    ctx.fillRect(74, 32, 5, 50);
+    // Лезвие топора
+    ctx.fillStyle = '#a0a0b0';
+    ctx.fillRect(68, 28, 18, 18);
+    // Блик на лезвии
+    ctx.fillStyle = '#e0e0f0';
+    ctx.fillRect(68, 28, 18, 3);
+    ctx.fillRect(68, 30, 4, 12);
+    // Тёмная сердцевина топора
+    ctx.fillStyle = '#606878';
+    ctx.fillRect(74, 36, 6, 6);
+    // Капля крови с лезвия
+    ctx.fillStyle = '#a01010';
+    ctx.fillRect(70, 46, 2, 4);
+
+    // Левая рука
+    ctx.fillStyle = c;
+    ctx.fillRect(0, 36, 14, 28);
+    ctx.fillStyle = cd;
+    ctx.fillRect(2, 42, 10, 1);
+    ctx.fillRect(2, 50, 10, 1);
+    // Кулак сжат
+    ctx.fillStyle = cl;
+    ctx.fillRect(-2, 60, 16, 10);
+
+    // Ноги копыта мощные
+    ctx.fillStyle = c;
+    ctx.fillRect(16, 72, 18, lf === 0 ? 12 : 8);
+    ctx.fillRect(50, 72, 18, lf === 0 ? 8 : 12);
+    // Тёмные копыта
+    ctx.fillStyle = '#1a0a04';
+    ctx.fillRect(16, lf === 0 ? 80 : 76, 18, 6);
+    ctx.fillRect(50, lf === 0 ? 76 : 80, 18, 6);
+    // Раздвоенность копыта
+    ctx.fillStyle = '#080000';
+    ctx.fillRect(24, lf === 0 ? 80 : 76, 2, 6);
+    ctx.fillRect(58, lf === 0 ? 76 : 80, 2, 6);
   }
 
   // Лич - скелет-маг в короне
   function drawBossLich(b) {
     const c = b.color, cl = b.light, cd = b.dark;
-    // Корона
+    const lf = b.legFrame;
+
+    // Корона детальная с шипами
     ctx.fillStyle = '#d4b040';
-    ctx.fillRect(18, 0, 34, 4);
-    ctx.fillRect(20, -4, 3, 4);
-    ctx.fillRect(26, -4, 3, 4);
-    ctx.fillRect(32, -6, 3, 6);
-    ctx.fillRect(38, -4, 3, 4);
-    ctx.fillRect(44, -4, 3, 4);
-    // Камень в короне
+    ctx.fillRect(14, 0, 38, 5);
+    // Шипы короны разной высоты
+    ctx.fillRect(16, -5, 3, 5);
+    ctx.fillRect(22, -7, 3, 7);
+    ctx.fillRect(28, -10, 4, 10);
+    ctx.fillRect(34, -7, 3, 7);
+    ctx.fillRect(40, -10, 4, 10);
+    ctx.fillRect(46, -7, 3, 7);
+    // Камень-рубин в короне
     ctx.fillStyle = '#ff2040';
-    ctx.fillRect(32, -3, 3, 4);
-    // Череп
+    ctx.fillRect(29, -8, 4, 5);
+    ctx.fillStyle = '#ff80a0';
+    ctx.fillRect(30, -7, 1, 1);
+    // Малые камни
+    ctx.fillStyle = '#40ffff';
+    ctx.fillRect(23, 1, 2, 2);
+    ctx.fillRect(41, 1, 2, 2);
+    // Тёмные кольца короны
+    ctx.fillStyle = '#a08020';
+    ctx.fillRect(14, 2, 38, 1);
+
+    // Череп с трещинами
     ctx.fillStyle = c;
-    ctx.fillRect(16, 4, 38, 32);
+    ctx.fillRect(12, 5, 42, 38);
+    // Тень верха черепа
     ctx.fillStyle = cd;
-    ctx.fillRect(16, 4, 38, 2);
-    // Глазницы светящиеся
+    ctx.fillRect(12, 5, 42, 3);
+    // Боковые впадины щёк
+    ctx.fillRect(12, 28, 4, 14);
+    ctx.fillRect(50, 28, 4, 14);
+    // Трещина на черепе
+    ctx.fillStyle = '#3a4858';
+    ctx.fillRect(28, 8, 1, 6);
+    ctx.fillRect(26, 12, 1, 4);
+    ctx.fillRect(30, 14, 1, 4);
+
+    // Глазницы глубокие чёрные
     ctx.fillStyle = '#000';
-    ctx.fillRect(22, 12, 8, 8);
-    ctx.fillRect(40, 12, 8, 8);
+    ctx.fillRect(18, 14, 12, 12);
+    ctx.fillRect(36, 14, 12, 12);
+    // Светящиеся глаза внутри глазниц - голубое пламя
     ctx.fillStyle = '#40ffff';
-    ctx.fillRect(24, 14, 4, 4);
-    ctx.fillRect(42, 14, 4, 4);
-    // Зубы
-    ctx.fillStyle = '#f5e8c0';
-    for (let i = 0; i < 7; i++) ctx.fillRect(20 + i * 4, 28, 2, 5);
-    // Плащ тёмный
-    ctx.fillStyle = '#2a1838';
-    ctx.fillRect(8, 36, 54, 50);
-    ctx.fillStyle = '#482058';
-    ctx.fillRect(12, 42, 46, 40);
-    // Костлявые руки
-    ctx.fillStyle = cl;
-    ctx.fillRect(0, 40, 10, 22);
-    ctx.fillRect(60, 40, 10, 22);
-    // Посох
+    ctx.fillRect(20, 17, 7, 7);
+    ctx.fillRect(38, 17, 7, 7);
+    ctx.fillStyle = '#80ffff';
+    ctx.fillRect(22, 18, 4, 4);
+    ctx.fillRect(40, 18, 4, 4);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(23, 19, 1, 1);
+    ctx.fillRect(41, 19, 1, 1);
+    // Огоньки выходят из глазниц
+    ctx.fillStyle = '#80ffff';
+    ctx.fillRect(22, 12, 2, 2);
+    ctx.fillRect(40, 12, 2, 2);
+
+    // Носовая впадина
+    ctx.fillStyle = '#000';
+    ctx.fillRect(31, 22, 4, 6);
     ctx.fillStyle = cd;
-    ctx.fillRect(-2, 32, 3, 50);
+    ctx.fillRect(32, 22, 2, 4);
+
+    // Скуласт зубы - детальный оскал
+    ctx.fillStyle = '#000';
+    ctx.fillRect(16, 32, 34, 8);
+    ctx.fillStyle = '#f5e8c0';
+    for (let i = 0; i < 9; i++) {
+      const tw = i % 2 === 0 ? 3 : 2;
+      const th = i % 3 === 0 ? 7 : 5;
+      ctx.fillRect(17 + i * 4, 32, tw, th);
+    }
+    // Тёмные щели между зубами
+    ctx.fillStyle = '#1a1a22';
+    for (let i = 0; i < 9; i++) ctx.fillRect(20 + i * 4, 34, 1, 4);
+
+    // Подбородок-челюсть
+    ctx.fillStyle = c;
+    ctx.fillRect(20, 40, 26, 4);
+
+    // Плащ тёмный с капюшоном
+    ctx.fillStyle = '#1a0820';
+    ctx.fillRect(2, 44, 64, 56);
+    // Внутренняя подкладка плаща
+    ctx.fillStyle = '#2a1838';
+    ctx.fillRect(6, 48, 56, 48);
+    // Светлая подкладка по краям
+    ctx.fillStyle = '#482058';
+    ctx.fillRect(12, 54, 44, 38);
+    // Складки плаща - тёмные вертикальные полосы
+    ctx.fillStyle = '#1a0820';
+    ctx.fillRect(18, 54, 1, 38);
+    ctx.fillRect(28, 54, 1, 38);
+    ctx.fillRect(38, 54, 1, 38);
+    ctx.fillRect(48, 54, 1, 38);
+    // Капюшон над головой - тень
+    ctx.fillStyle = '#1a0820';
+    ctx.fillRect(8, 36, 50, 8);
+
+    // Высокий воротник плаща
+    ctx.fillStyle = '#3a1858';
+    ctx.fillRect(10, 38, 6, 14);
+    ctx.fillRect(50, 38, 6, 14);
+
+    // Подвеска-амулет
+    ctx.fillStyle = '#d4b040';
+    ctx.fillRect(28, 60, 8, 8);
+    ctx.fillStyle = '#ff2040';
+    ctx.fillRect(30, 62, 4, 4);
+    // Цепочка
+    ctx.fillStyle = '#a08020';
+    ctx.fillRect(26, 50, 2, 10);
+    ctx.fillRect(36, 50, 2, 10);
+
+    // Костлявые руки в перчатках
+    ctx.fillStyle = '#1a0820';
+    ctx.fillRect(-4, 46, 14, 32);
+    ctx.fillRect(58, 46, 14, 32);
+    // Костяшки пальцев светлые
+    ctx.fillStyle = cl;
+    ctx.fillRect(-6, 76, 16, 8);
+    ctx.fillRect(58, 76, 16, 8);
+    // Пальцы как когти
+    ctx.fillStyle = cd;
+    for (let i = 0; i < 4; i++) {
+      ctx.fillRect(-5 + i * 4, 82, 2, 4);
+      ctx.fillRect(60 + i * 4, 82, 2, 4);
+    }
+
+    // Магический посох
+    ctx.fillStyle = '#3a2010';
+    ctx.fillRect(-4, 28, 4, 60);
+    // Узор на посохе
+    ctx.fillStyle = '#806840';
+    ctx.fillRect(-4, 40, 4, 1);
+    ctx.fillRect(-4, 52, 4, 1);
+    ctx.fillRect(-4, 64, 4, 1);
+    // Кристалл на посохе - голубой
+    ctx.fillStyle = '#000';
+    ctx.fillRect(-10, 22, 16, 14);
     ctx.fillStyle = '#40ffff';
-    ctx.fillRect(-6, 28, 10, 8);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(-4, 30, 4, 4);
+    ctx.fillRect(-8, 24, 12, 10);
+    ctx.fillStyle = '#80ffff';
+    ctx.fillRect(-6, 26, 8, 6);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(-4, 28, 3, 2);
+    // Магический ореол
+    ctx.fillStyle = 'rgba(64, 255, 255, 0.4)';
+    ctx.fillRect(-12, 20, 20, 18);
+
+    // Низ плаща - рваные полы
+    ctx.fillStyle = '#1a0820';
+    ctx.fillRect(2, 96, 8, 8);
+    ctx.fillRect(14, 96, 6, 6);
+    ctx.fillRect(24, 96, 8, 10);
+    ctx.fillRect(38, 96, 6, 6);
+    ctx.fillRect(48, 96, 8, 8);
+    ctx.fillRect(58, 96, 6, 6);
   }
 
   // Король гоблинов - мелкий с короной
   function drawBossGoblinKing(b) {
     const c = b.color, cl = b.light, cd = b.dark;
-    // Корона золотая
+    const lf = b.legFrame;
+
+    // Корона детальная с шипами
     ctx.fillStyle = '#d4b040';
-    ctx.fillRect(14, 0, 40, 4);
-    ctx.fillRect(16, -4, 3, 4);
-    ctx.fillRect(22, -5, 3, 5);
-    ctx.fillRect(30, -6, 4, 6);
-    ctx.fillRect(39, -5, 3, 5);
-    ctx.fillRect(46, -4, 3, 4);
+    ctx.fillRect(10, 0, 50, 5);
+    ctx.fillRect(12, -5, 4, 5);
+    ctx.fillRect(20, -7, 4, 7);
+    ctx.fillRect(28, -9, 5, 9);
+    ctx.fillRect(37, -7, 4, 7);
+    ctx.fillRect(45, -7, 4, 7);
+    ctx.fillRect(53, -5, 4, 5);
+    // Основные камни короны
     ctx.fillStyle = '#ff4040';
-    ctx.fillRect(31, -3, 2, 3);
-    // Острые уши
+    ctx.fillRect(29, -6, 3, 4);
+    ctx.fillStyle = '#40ff40';
+    ctx.fillRect(20, 1, 3, 3);
+    ctx.fillStyle = '#4080ff';
+    ctx.fillRect(46, 1, 3, 3);
+    // Тёмные тени короны
+    ctx.fillStyle = '#806818';
+    ctx.fillRect(10, 3, 50, 1);
+
+    // Большие острые уши
     ctx.fillStyle = c;
-    ctx.fillRect(4, 8, 6, 12);
-    ctx.fillRect(58, 8, 6, 12);
-    // Голова
-    ctx.fillRect(10, 4, 50, 28);
-    // Хитрые жёлтые глаза
-    ctx.fillStyle = '#ffee40';
-    ctx.fillRect(18, 12, 6, 4);
-    ctx.fillRect(44, 12, 6, 4);
-    ctx.fillStyle = '#000';
-    ctx.fillRect(20, 13, 3, 3);
-    ctx.fillRect(46, 13, 3, 3);
-    // Нос крючковатый
+    ctx.fillRect(0, 8, 8, 18);
+    ctx.fillRect(56, 8, 8, 18);
     ctx.fillStyle = cd;
-    ctx.fillRect(32, 16, 6, 8);
-    // Кривой рот с зубами
-    ctx.fillStyle = '#1a0005';
-    ctx.fillRect(18, 24, 34, 5);
-    ctx.fillStyle = '#f5e8c0';
-    for (let i = 0; i < 8; i++) ctx.fillRect(19 + i * 4, 24, 2, 4);
-    // Маленькое тело
-    ctx.fillStyle = c;
-    ctx.fillRect(14, 34, 42, 22);
-    ctx.fillStyle = cl;
-    ctx.fillRect(20, 40, 30, 14);
-    // Скипетр
-    ctx.fillStyle = '#8b5a2b';
-    ctx.fillRect(58, 32, 3, 30);
+    ctx.fillRect(2, 14, 4, 8);
+    ctx.fillRect(58, 14, 4, 8);
+    // Серьги в ушах
     ctx.fillStyle = '#d4b040';
-    ctx.fillRect(55, 28, 9, 7);
-    // Ноги
+    ctx.fillRect(2, 22, 3, 3);
+    ctx.fillRect(60, 22, 3, 3);
+
+    // Лысая голова с татуировками
+    ctx.fillStyle = c;
+    ctx.fillRect(8, 4, 50, 30);
+    // Тень верхушки
     ctx.fillStyle = cd;
-    ctx.fillRect(16, 56, 14, 14);
-    ctx.fillRect(40, 56, 14, 14);
+    ctx.fillRect(8, 4, 50, 3);
+    // Татуировка-руна на лбу
+    ctx.fillStyle = '#1a4010';
+    ctx.fillRect(28, 8, 8, 1);
+    ctx.fillRect(30, 9, 4, 1);
+    ctx.fillRect(31, 10, 2, 1);
+
+    // Брови нависающие
+    ctx.fillStyle = cd;
+    ctx.fillRect(15, 12, 12, 3);
+    ctx.fillRect(40, 12, 12, 3);
+
+    // Хитрые жёлтые глаза с щелями зрачков
+    ctx.fillStyle = '#fffaa0';
+    ctx.fillRect(15, 15, 12, 6);
+    ctx.fillRect(40, 15, 12, 6);
+    ctx.fillStyle = '#ffee40';
+    ctx.fillRect(17, 16, 8, 4);
+    ctx.fillRect(42, 16, 8, 4);
+    // Щелевые зрачки змеиные
+    ctx.fillStyle = '#000';
+    ctx.fillRect(20, 16, 1, 4);
+    ctx.fillRect(45, 16, 1, 4);
+    // Блики
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(18, 17, 1, 1);
+    ctx.fillRect(43, 17, 1, 1);
+
+    // Большой крючковатый нос
+    ctx.fillStyle = c;
+    ctx.fillRect(28, 18, 8, 12);
+    ctx.fillStyle = cd;
+    ctx.fillRect(28, 22, 8, 2);
+    ctx.fillRect(30, 28, 6, 2);
+    // Бородавка на носу
+    ctx.fillStyle = '#1a4010';
+    ctx.fillRect(34, 24, 2, 2);
+
+    // Кривой рот с клыками
+    ctx.fillStyle = '#1a0005';
+    ctx.fillRect(14, 28, 40, 6);
+    ctx.fillStyle = '#f5e8c0';
+    // Клыки выступающие
+    ctx.fillRect(16, 28, 3, 6);
+    ctx.fillRect(22, 28, 2, 4);
+    ctx.fillRect(28, 28, 2, 5);
+    ctx.fillRect(34, 28, 2, 5);
+    ctx.fillRect(40, 28, 2, 4);
+    ctx.fillRect(48, 28, 3, 6);
+    // Слюна
+    ctx.fillStyle = '#a0ff80';
+    ctx.fillRect(17, 33, 1, 2);
+    ctx.fillRect(49, 33, 1, 2);
+    // Язык
+    ctx.fillStyle = '#c83040';
+    ctx.fillRect(28, 30, 10, 3);
+
+    // Шея худая
+    ctx.fillStyle = c;
+    ctx.fillRect(24, 32, 18, 4);
+
+    // Маленькое тело в лохмотьях
+    ctx.fillStyle = c;
+    ctx.fillRect(12, 36, 44, 24);
+    // Жилет/туника
+    ctx.fillStyle = '#3a2010';
+    ctx.fillRect(14, 38, 40, 20);
+    ctx.fillStyle = '#5a3018';
+    ctx.fillRect(18, 40, 32, 16);
+    // Заплатка на тунике
+    ctx.fillStyle = '#806840';
+    ctx.fillRect(22, 44, 6, 6);
+    ctx.fillStyle = '#3a2010';
+    ctx.fillRect(23, 45, 4, 4);
+    // Стежки крест-накрест
+    ctx.fillStyle = '#1a1008';
+    ctx.fillRect(22, 44, 1, 1);
+    ctx.fillRect(27, 44, 1, 1);
+    ctx.fillRect(22, 49, 1, 1);
+    ctx.fillRect(27, 49, 1, 1);
+
+    // Пояс с черепами
+    ctx.fillStyle = '#1a0a04';
+    ctx.fillRect(12, 54, 44, 4);
+    ctx.fillStyle = '#f5e8c0';
+    ctx.fillRect(20, 55, 4, 3);
+    ctx.fillRect(32, 55, 4, 3);
+    ctx.fillRect(44, 55, 4, 3);
+    // Глаза маленьких черепов
+    ctx.fillStyle = '#000';
+    ctx.fillRect(21, 56, 1, 1);
+    ctx.fillRect(33, 56, 1, 1);
+    ctx.fillRect(45, 56, 1, 1);
+
+    // Худые руки с длинными когтями
+    ctx.fillStyle = c;
+    ctx.fillRect(2, 38, 12, 22);
+    ctx.fillRect(54, 38, 12, 22);
+    // Тёмные складки кожи на руках
+    ctx.fillStyle = cd;
+    ctx.fillRect(4, 44, 8, 1);
+    ctx.fillRect(4, 50, 8, 1);
+    // Когти
+    ctx.fillStyle = '#1a1a22';
+    ctx.fillRect(2, 60, 2, 4);
+    ctx.fillRect(6, 60, 2, 4);
+    ctx.fillRect(10, 60, 2, 4);
+    ctx.fillRect(56, 60, 2, 4);
+    ctx.fillRect(60, 60, 2, 4);
+    ctx.fillRect(64, 60, 2, 4);
+
+    // Скипетр-кость в руке
+    ctx.fillStyle = '#f5e8c0';
+    ctx.fillRect(60, 32, 4, 36);
+    // Череп на верху скипетра
+    ctx.fillStyle = '#fff8d0';
+    ctx.fillRect(56, 26, 12, 10);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(58, 28, 2, 3);
+    ctx.fillRect(64, 28, 2, 3);
+    ctx.fillRect(60, 32, 4, 2);
+    // Руны на скипетре
+    ctx.fillStyle = '#1a4010';
+    ctx.fillRect(60, 42, 4, 1);
+    ctx.fillRect(60, 50, 4, 1);
+    ctx.fillRect(60, 58, 4, 1);
+
+    // Кривые ноги в сапогах
+    ctx.fillStyle = c;
+    ctx.fillRect(14, 60, 14, lf === 0 ? 14 : 10);
+    ctx.fillRect(40, 60, 14, lf === 0 ? 10 : 14);
+    // Сапоги
+    ctx.fillStyle = '#1a0a04';
+    ctx.fillRect(12, lf === 0 ? 70 : 66, 18, 6);
+    ctx.fillRect(38, lf === 0 ? 66 : 70, 18, 6);
+    // Носки сапог загнутые
+    ctx.fillStyle = '#3a2010';
+    ctx.fillRect(28, lf === 0 ? 70 : 66, 4, 4);
+    ctx.fillRect(54, lf === 0 ? 66 : 70, 4, 4);
   }
 
   // Огненный элементаль
   function drawBossFlame(b) {
     const c = b.color, cl = b.light, cd = b.dark;
     const flick = (frameCount % 10) / 10;
-    // Тёмное ядро
+    const flick2 = ((frameCount + 5) % 10) / 10;
+
+    // Тёмная аура внизу
+    ctx.fillStyle = '#1a0000';
+    ctx.fillRect(10, 70, 60, 16);
+    ctx.fillStyle = 'rgba(60,0,0,0.5)';
+    ctx.fillRect(6, 76, 68, 14);
+
+    // Внешняя огненная аура
+    ctx.fillStyle = 'rgba(224,64,32,0.4)';
+    ctx.fillRect(6, 16, 66, 70);
+
+    // Тёмное ядро тела
     ctx.fillStyle = '#400800';
-    ctx.fillRect(18, 28, 42, 50);
+    ctx.fillRect(16, 26, 46, 54);
+
     // Тело огня - несколько слоёв
     ctx.fillStyle = c;
-    ctx.fillRect(14, 20 + flick * 2, 50, 60);
+    ctx.fillRect(12, 18 + flick * 2, 54, 64);
     ctx.fillStyle = '#ff6020';
-    ctx.fillRect(20, 30 + flick * 3, 38, 48);
+    ctx.fillRect(18, 28 + flick * 3, 42, 52);
     ctx.fillStyle = cl;
-    ctx.fillRect(26, 40, 26, 32);
-    // Языки пламени сверху
+    ctx.fillRect(24, 38, 30, 36);
+    ctx.fillStyle = '#ffff80';
+    ctx.fillRect(30, 46, 18, 22);
+
+    // Языки пламени сверху - множество
     ctx.fillStyle = c;
-    ctx.fillRect(20, 4 + flick * 2, 6, 20);
-    ctx.fillRect(34, -2 + flick, 8, 28);
-    ctx.fillRect(50, 2 + flick * 3, 6, 22);
+    ctx.fillRect(14, 6 + flick * 2, 6, 22);
+    ctx.fillRect(24, 0 + flick, 8, 28);
+    ctx.fillRect(36, -4 + flick * 2, 10, 32);
+    ctx.fillRect(48, 2 + flick, 8, 26);
+    ctx.fillRect(58, 8 + flick * 2, 6, 20);
+    // Внутренние языки пламени светлее
+    ctx.fillStyle = '#ff6020';
+    ctx.fillRect(16, 12 + flick * 2, 2, 12);
+    ctx.fillRect(26, 6 + flick, 4, 18);
+    ctx.fillRect(38, 2 + flick * 2, 6, 22);
+    ctx.fillRect(50, 8 + flick, 4, 16);
+    ctx.fillRect(60, 14 + flick * 2, 2, 12);
+    // Самые яркие сердцевины
     ctx.fillStyle = cl;
-    ctx.fillRect(22, 10 + flick * 2, 2, 10);
-    ctx.fillRect(36, 4 + flick, 4, 18);
-    ctx.fillRect(51, 8, 2, 14);
-    // Горящие глаза
-    ctx.fillStyle = '#ffff80';
-    ctx.fillRect(26, 34, 6, 5);
-    ctx.fillRect(46, 34, 6, 5);
+    ctx.fillRect(28, 12 + flick, 2, 12);
+    ctx.fillRect(40, 8 + flick * 2, 2, 14);
+    ctx.fillRect(52, 14 + flick, 2, 10);
+    // Самые верхние точки - белые
     ctx.fillStyle = '#fff';
-    ctx.fillRect(28, 35, 2, 2);
-    ctx.fillRect(48, 35, 2, 2);
-    // Рот с огнём
+    ctx.fillRect(40, 0 + flick * 2, 2, 4);
+
+    // Брови огненные
     ctx.fillStyle = '#ffff40';
-    ctx.fillRect(30, 50, 18, 8);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(32, 52, 14, 4);
-    // Искры
+    ctx.fillRect(20, 28, 12, 3);
+    ctx.fillRect(46, 28, 12, 3);
+
+    // Горящие глаза - детальные
+    ctx.fillStyle = '#000';
+    ctx.fillRect(22, 32, 12, 8);
+    ctx.fillRect(44, 32, 12, 8);
     ctx.fillStyle = '#ffff80';
-    ctx.fillRect(8 + flick * 10, 20, 2, 2);
-    ctx.fillRect(65, 30 + flick * 8, 2, 2);
-    ctx.fillRect(12, 50 + flick * 6, 2, 2);
+    ctx.fillRect(24, 34, 8, 5);
+    ctx.fillRect(46, 34, 8, 5);
+    ctx.fillStyle = '#ffff40';
+    ctx.fillRect(26, 35, 4, 3);
+    ctx.fillRect(48, 35, 4, 3);
+    // Зрачки чёрные
+    ctx.fillStyle = '#a01000';
+    ctx.fillRect(27, 36, 2, 2);
+    ctx.fillRect(49, 36, 2, 2);
+
+    // Рот огненный с зубами-углями
+    ctx.fillStyle = '#000';
+    ctx.fillRect(24, 50, 30, 12);
+    ctx.fillStyle = '#ffff40';
+    ctx.fillRect(26, 50, 26, 10);
+    // Зубы - угольки тёмные
+    ctx.fillStyle = '#1a0000';
+    for (let i = 0; i < 6; i++) {
+      ctx.fillRect(28 + i * 4, 50, 2, 4);
+    }
+    // Огненный язык
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(34, 54, 10, 4);
+
+    // Искры разлетающиеся
+    ctx.fillStyle = '#ffff80';
+    ctx.fillRect(6 + flick * 12, 18, 2, 2);
+    ctx.fillRect(68, 28 + flick * 10, 2, 2);
+    ctx.fillRect(10, 50 + flick * 8, 2, 2);
+    ctx.fillRect(72, 60 + flick2 * 8, 2, 2);
+    ctx.fillRect(2 + flick2 * 14, 68, 2, 2);
+    ctx.fillStyle = '#ff8040';
+    ctx.fillRect(4 + flick * 16, 38, 1, 1);
+    ctx.fillRect(74, 42 + flick2 * 8, 1, 1);
+
+    // Когтистые "руки" из огня
+    ctx.fillStyle = c;
+    ctx.fillRect(0, 38 + flick, 14, 28);
+    ctx.fillRect(64, 38 + flick2, 14, 28);
+    ctx.fillStyle = '#ff6020';
+    ctx.fillRect(2, 42 + flick, 10, 22);
+    ctx.fillRect(66, 42 + flick2, 10, 22);
+    // Пальцы-языки пламени
+    ctx.fillStyle = c;
+    ctx.fillRect(0, 60 + flick, 4, 8);
+    ctx.fillRect(5, 62 + flick, 4, 8);
+    ctx.fillRect(10, 60 + flick, 4, 8);
+    ctx.fillRect(64, 62 + flick2, 4, 8);
+    ctx.fillRect(69, 60 + flick2, 4, 8);
+    ctx.fillRect(74, 62 + flick2, 4, 8);
   }
 
   // Ледяной гигант
   function drawBossIce(b) {
     const c = b.color, cl = b.light, cd = b.dark;
-    // Ледяные шипы сверху и по плечам
+    const lf = b.legFrame;
+
+    // Ледяные шипы сверху - множество разной высоты
     ctx.fillStyle = cl;
-    ctx.fillRect(10, 0, 4, 14);
-    ctx.fillRect(20, -4, 4, 16);
-    ctx.fillRect(32, -6, 6, 20);
-    ctx.fillRect(48, -4, 4, 16);
-    ctx.fillRect(62, -2, 4, 14);
-    ctx.fillRect(72, 2, 4, 12);
-    // Тело голубое ледяное
-    ctx.fillStyle = c;
-    ctx.fillRect(12, 14, 60, 60);
-    ctx.fillStyle = cl;
-    ctx.fillRect(20, 24, 44, 42);
-    // Трещины во льду
+    ctx.fillRect(8, 0, 4, 14);
+    ctx.fillRect(16, -4, 4, 18);
+    ctx.fillRect(24, -8, 5, 22);
+    ctx.fillRect(33, -12, 6, 26);
+    ctx.fillRect(43, -8, 5, 22);
+    ctx.fillRect(52, -4, 4, 18);
+    ctx.fillRect(60, -2, 4, 16);
+    ctx.fillRect(68, 0, 4, 14);
+    ctx.fillRect(76, 2, 4, 12);
+    // Светлые блики на шипах
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(8, 4, 1, 8);
+    ctx.fillRect(16, 0, 1, 12);
+    ctx.fillRect(25, -4, 1, 16);
+    ctx.fillRect(34, -8, 1, 20);
+    ctx.fillRect(44, -4, 1, 16);
+    ctx.fillRect(53, 0, 1, 12);
+    ctx.fillRect(61, 2, 1, 12);
+    // Тёмные сердцевины шипов
     ctx.fillStyle = cd;
-    ctx.fillRect(28, 20, 2, 10);
-    ctx.fillRect(50, 22, 2, 8);
-    ctx.fillRect(32, 48, 2, 12);
-    // Голова
+    ctx.fillRect(36, -6, 2, 18);
+    ctx.fillRect(46, -2, 2, 14);
+
+    // Тело голубое ледяное массивное
     ctx.fillStyle = c;
-    ctx.fillRect(20, 12, 46, 24);
-    // Синие светящиеся глаза
+    ctx.fillRect(10, 12, 64, 62);
+    // Светлая центральная часть - ледяная грудь
+    ctx.fillStyle = cl;
+    ctx.fillRect(18, 22, 48, 44);
+    // Прозрачные блики
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(20, 24, 4, 16);
+    ctx.fillRect(60, 26, 4, 14);
+
+    // Трещины во льду - множество
+    ctx.fillStyle = cd;
+    ctx.fillRect(26, 18, 2, 14);
+    ctx.fillRect(28, 30, 1, 6);
+    ctx.fillRect(50, 20, 2, 10);
+    ctx.fillRect(48, 28, 1, 6);
+    ctx.fillRect(32, 46, 2, 14);
+    ctx.fillRect(52, 50, 2, 12);
+    ctx.fillRect(40, 36, 2, 8);
+
+    // Замерзшие пузыри во льду
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(28, 38, 3, 3);
+    ctx.fillRect(56, 42, 3, 3);
+    ctx.fillRect(40, 56, 3, 3);
+
+    // Голова - ледяной череп
+    ctx.fillStyle = c;
+    ctx.fillRect(16, 8, 52, 30);
+    // Тень верха
+    ctx.fillStyle = cd;
+    ctx.fillRect(16, 8, 52, 3);
+    // Корона из льда
+    ctx.fillStyle = cl;
+    ctx.fillRect(20, 6, 6, 8);
+    ctx.fillRect(30, 4, 6, 10);
+    ctx.fillRect(40, 4, 6, 10);
+    ctx.fillRect(50, 6, 6, 8);
+    ctx.fillRect(60, 8, 4, 6);
+
+    // Брови ледяные нависающие
+    ctx.fillStyle = cd;
+    ctx.fillRect(22, 16, 14, 4);
+    ctx.fillRect(48, 16, 14, 4);
+
+    // Светящиеся синие глаза
+    ctx.fillStyle = '#000';
+    ctx.fillRect(22, 20, 14, 8);
+    ctx.fillRect(48, 20, 14, 8);
     ctx.fillStyle = '#80e0ff';
-    ctx.fillRect(26, 20, 6, 5);
-    ctx.fillRect(50, 20, 6, 5);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(27, 21, 2, 2);
-    ctx.fillRect(51, 21, 2, 2);
-    // Рот с ледяными зубами
-    ctx.fillStyle = '#2a4a60';
-    ctx.fillRect(28, 28, 24, 5);
+    ctx.fillRect(24, 21, 10, 6);
+    ctx.fillRect(50, 21, 10, 6);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(26, 22, 6, 4);
+    ctx.fillRect(52, 22, 6, 4);
+    // Точки зрачков
+    ctx.fillStyle = '#0080a0';
+    ctx.fillRect(28, 23, 2, 2);
+    ctx.fillRect(54, 23, 2, 2);
+    // Сияние от глаз
+    ctx.fillStyle = '#80e0ff';
+    ctx.fillRect(20, 24, 2, 2);
+    ctx.fillRect(62, 24, 2, 2);
+
+    // Нос - ледяная сосулька
     ctx.fillStyle = cl;
-    for (let i = 0; i < 6; i++) ctx.fillRect(29 + i * 4, 28, 2, 4);
-    // Руки с ледяными кулаками
+    ctx.fillRect(38, 24, 6, 8);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(39, 24, 1, 6);
+
+    // Рот с ледяными зубами-сосульками
+    ctx.fillStyle = '#1a3050';
+    ctx.fillRect(22, 32, 36, 8);
+    ctx.fillStyle = cl;
+    // Зубы-сосульки
+    ctx.fillRect(24, 32, 3, 8);
+    ctx.fillRect(30, 32, 2, 6);
+    ctx.fillRect(36, 32, 3, 7);
+    ctx.fillRect(42, 32, 2, 6);
+    ctx.fillRect(48, 32, 3, 8);
+    ctx.fillRect(54, 32, 2, 6);
+    // Иней внутри рта
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(28, 36, 2, 2);
+    ctx.fillRect(40, 36, 2, 2);
+    ctx.fillRect(52, 36, 2, 2);
+
+    // Огромные руки с ледяной броней
     ctx.fillStyle = c;
-    ctx.fillRect(0, 20, 12, 36);
-    ctx.fillRect(70, 20, 12, 36);
+    ctx.fillRect(-4, 22, 14, 36);
+    ctx.fillRect(70, 22, 14, 36);
+    // Ледяная броня по плечам - наплечники
     ctx.fillStyle = cl;
-    ctx.fillRect(-2, 50, 14, 12);
-    ctx.fillRect(68, 50, 14, 12);
-    // Ноги
+    ctx.fillRect(-6, 22, 18, 12);
+    ctx.fillRect(68, 22, 18, 12);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(-4, 24, 4, 4);
+    ctx.fillRect(70, 24, 4, 4);
+    // Шипы на наплечниках
+    ctx.fillStyle = cl;
+    ctx.fillRect(-2, 18, 3, 5);
+    ctx.fillRect(4, 16, 3, 7);
+    ctx.fillRect(76, 18, 3, 5);
+    ctx.fillRect(82, 16, 3, 7);
+
+    // Ледяные кулаки
+    ctx.fillStyle = cl;
+    ctx.fillRect(-6, 54, 18, 14);
+    ctx.fillRect(68, 54, 18, 14);
+    // Костяшки кулаков
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(-4, 56, 2, 2);
+    ctx.fillRect(0, 56, 2, 2);
+    ctx.fillRect(4, 56, 2, 2);
+    ctx.fillRect(8, 56, 2, 2);
+    ctx.fillRect(70, 56, 2, 2);
+    ctx.fillRect(74, 56, 2, 2);
+    ctx.fillRect(78, 56, 2, 2);
+    ctx.fillRect(82, 56, 2, 2);
+
+    // Ноги ледяные
+    ctx.fillStyle = c;
+    ctx.fillRect(18, 74, 18, lf === 0 ? 16 : 12);
+    ctx.fillRect(48, 74, 18, lf === 0 ? 12 : 16);
+    // Ледяные стопы с шипами
+    ctx.fillStyle = cl;
+    ctx.fillRect(16, lf === 0 ? 84 : 80, 22, 6);
+    ctx.fillRect(46, lf === 0 ? 80 : 84, 22, 6);
+    // Тёмные стельки
     ctx.fillStyle = cd;
-    ctx.fillRect(20, 74, 16, 18);
-    ctx.fillRect(48, 74, 16, 18);
+    ctx.fillRect(16, lf === 0 ? 88 : 84, 22, 2);
+    ctx.fillRect(46, lf === 0 ? 84 : 88, 22, 2);
+
+    // Снежинки вокруг (декорация)
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(2, 30, 2, 2);
+    ctx.fillRect(78, 40, 2, 2);
+    ctx.fillRect(0, 50, 2, 2);
+    ctx.fillRect(80, 60, 2, 2);
   }
 
   // Тёмный зверь - чёрная тень с красными глазами
   function drawBossShadow(b) {
     const c = b.color, cl = b.light, cd = b.dark;
-    // Аура-дымка по контуру
+    const lf = b.legFrame;
+    const flick = (frameCount % 16) / 16;
+
+    // Внешняя аура-дымка - несколько слоёв
     ctx.fillStyle = cl;
-    ctx.globalAlpha = 0.3;
+    ctx.globalAlpha = 0.2;
+    ctx.fillRect(-4, 4, 86, 80);
+    ctx.globalAlpha = 0.35;
     ctx.fillRect(0, 8, 78, 72);
-    ctx.globalAlpha = 0.5;
+    ctx.globalAlpha = 0.55;
     ctx.fillRect(4, 12, 70, 64);
     ctx.globalAlpha = 1;
-    // Тёмное тело
+
+    // Дымные щупальца сверху и по бокам
+    ctx.fillStyle = cl;
+    ctx.globalAlpha = 0.4;
+    ctx.fillRect(8 + flick * 4, 0, 4, 10);
+    ctx.fillRect(28 + flick * 2, -2, 4, 12);
+    ctx.fillRect(48 - flick * 2, -2, 4, 12);
+    ctx.fillRect(64 - flick * 4, 0, 4, 10);
+    // Дым по бокам
+    ctx.fillRect(-2, 30 + flick * 3, 4, 14);
+    ctx.fillRect(76, 36 - flick * 3, 4, 14);
+    ctx.globalAlpha = 1;
+
+    // Тёмное тело с глубокими тенями
     ctx.fillStyle = c;
-    ctx.fillRect(10, 14, 58, 60);
+    ctx.fillRect(8, 14, 62, 62);
     ctx.fillStyle = cd;
-    ctx.fillRect(14, 18, 50, 54);
-    // Рога тёмные
+    ctx.fillRect(12, 18, 54, 54);
+    // Чёрная сердцевина
+    ctx.fillStyle = '#080010';
+    ctx.fillRect(18, 24, 42, 42);
+
+    // Рваные лохмотья (как ткань без формы)
     ctx.fillStyle = c;
-    ctx.fillRect(14, 6, 4, 12);
-    ctx.fillRect(12, 2, 3, 6);
-    ctx.fillRect(60, 6, 4, 12);
-    ctx.fillRect(63, 2, 3, 6);
-    // Яростные красные глаза
+    ctx.fillRect(2, 50, 8, 14);
+    ctx.fillRect(68, 50, 8, 14);
+    ctx.fillStyle = cd;
+    ctx.fillRect(4, 60, 6, 8);
+    ctx.fillRect(70, 60, 6, 8);
+
+    // Рога демонические - крупные, изогнутые
+    ctx.fillStyle = c;
+    ctx.fillRect(10, 4, 5, 14);
+    ctx.fillRect(8, 0, 5, 6);
+    ctx.fillRect(6, -4, 4, 6);
+    ctx.fillRect(63, 4, 5, 14);
+    ctx.fillRect(65, 0, 5, 6);
+    ctx.fillRect(68, -4, 4, 6);
+    // Тёмные кольца на рогах
+    ctx.fillStyle = '#080010';
+    ctx.fillRect(10, 8, 5, 1);
+    ctx.fillRect(10, 12, 5, 1);
+    ctx.fillRect(63, 8, 5, 1);
+    ctx.fillRect(63, 12, 5, 1);
+
+    // Брови нависающие злые
+    ctx.fillStyle = '#080010';
+    ctx.fillRect(16, 18, 14, 4);
+    ctx.fillRect(48, 18, 14, 4);
+
+    // Яростные красные глаза - детальные
+    ctx.fillStyle = '#000';
+    ctx.fillRect(16, 22, 14, 8);
+    ctx.fillRect(48, 22, 14, 8);
+    // Внешний красный
     ctx.fillStyle = '#ff2020';
-    ctx.fillRect(20, 22, 8, 5);
-    ctx.fillRect(50, 22, 8, 5);
+    ctx.fillRect(18, 23, 10, 6);
+    ctx.fillRect(50, 23, 10, 6);
+    // Внутренний жёлтый
     ctx.fillStyle = '#ffff80';
-    ctx.fillRect(22, 23, 4, 3);
-    ctx.fillRect(52, 23, 4, 3);
+    ctx.fillRect(20, 24, 6, 4);
+    ctx.fillRect(52, 24, 6, 4);
+    // Зрачки - щели
     ctx.fillStyle = '#000';
-    ctx.fillRect(23, 24, 2, 2);
-    ctx.fillRect(53, 24, 2, 2);
-    // Пасть - горящая
-    ctx.fillStyle = '#000';
-    ctx.fillRect(20, 36, 38, 10);
+    ctx.fillRect(22, 24, 2, 4);
+    ctx.fillRect(54, 24, 2, 4);
+    // Свечение из глаз
     ctx.fillStyle = '#ff4040';
-    ctx.fillRect(22, 38, 34, 6);
-    ctx.fillStyle = '#ffffff';
-    // Острые клыки
-    ctx.fillRect(22, 36, 3, 8);
-    ctx.fillRect(28, 36, 3, 6);
-    ctx.fillRect(36, 36, 3, 6);
-    ctx.fillRect(44, 36, 3, 6);
-    ctx.fillRect(52, 36, 3, 8);
-    // Когтистые лапы
+    ctx.globalAlpha = 0.6;
+    ctx.fillRect(14, 26, 18, 2);
+    ctx.fillRect(46, 26, 18, 2);
+    ctx.globalAlpha = 1;
+
+    // Нос - провал в темноту
+    ctx.fillStyle = '#000';
+    ctx.fillRect(36, 30, 6, 4);
+
+    // Огромная пасть с горящим зевом
+    ctx.fillStyle = '#000';
+    ctx.fillRect(14, 36, 50, 14);
+    // Внутренний огонь в пасти
+    ctx.fillStyle = '#a00010';
+    ctx.fillRect(16, 38, 46, 10);
+    ctx.fillStyle = '#ff4040';
+    ctx.fillRect(20, 40, 38, 6);
+    ctx.fillStyle = '#ffff80';
+    ctx.fillRect(28, 42, 22, 2);
+
+    // Острые клыки - множество
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(16, 36, 4, 10);
+    ctx.fillRect(22, 36, 3, 7);
+    ctx.fillRect(28, 36, 3, 8);
+    ctx.fillRect(34, 36, 3, 6);
+    ctx.fillRect(40, 36, 3, 7);
+    ctx.fillRect(46, 36, 3, 8);
+    ctx.fillRect(52, 36, 3, 6);
+    ctx.fillRect(58, 36, 4, 9);
+    // Нижние клыки
+    ctx.fillStyle = '#e0e0e0';
+    ctx.fillRect(18, 46, 3, 4);
+    ctx.fillRect(26, 46, 3, 4);
+    ctx.fillRect(34, 46, 3, 4);
+    ctx.fillRect(42, 46, 3, 4);
+    ctx.fillRect(50, 46, 3, 4);
+    ctx.fillRect(58, 46, 3, 4);
+
+    // Когтистые лапы массивные
     ctx.fillStyle = c;
-    ctx.fillRect(0, 30, 12, 40);
-    ctx.fillRect(66, 30, 12, 40);
+    ctx.fillRect(-2, 28, 14, 44);
+    ctx.fillRect(66, 28, 14, 44);
+    // Тени мышц на лапах
+    ctx.fillStyle = '#080010';
+    ctx.fillRect(0, 36, 10, 2);
+    ctx.fillRect(0, 50, 10, 2);
+    ctx.fillRect(0, 62, 10, 2);
+    ctx.fillRect(68, 36, 10, 2);
+    ctx.fillRect(68, 50, 10, 2);
+    ctx.fillRect(68, 62, 10, 2);
+
+    // Длинные кровавые когти
+    ctx.fillStyle = '#1a0008';
+    ctx.fillRect(-4, 68, 4, 8);
+    ctx.fillRect(0, 68, 3, 8);
+    ctx.fillRect(4, 68, 3, 8);
+    ctx.fillRect(8, 68, 3, 8);
+    ctx.fillRect(66, 68, 3, 8);
+    ctx.fillRect(70, 68, 3, 8);
+    ctx.fillRect(74, 68, 3, 8);
+    ctx.fillRect(78, 68, 4, 8);
+    // Кровь на кончиках когтей
+    ctx.fillStyle = '#a01010';
+    ctx.fillRect(-3, 74, 2, 2);
+    ctx.fillRect(5, 74, 2, 2);
+    ctx.fillRect(75, 74, 2, 2);
+    ctx.fillRect(79, 74, 2, 2);
+
+    // Ноги - призрачные размытые
+    ctx.fillStyle = c;
+    ctx.fillRect(14, 72, 16, lf === 0 ? 14 : 10);
+    ctx.fillRect(50, 72, 16, lf === 0 ? 10 : 14);
+    // Когти на стопах
+    ctx.fillStyle = '#080010';
+    ctx.fillRect(14, lf === 0 ? 82 : 78, 4, 6);
+    ctx.fillRect(20, lf === 0 ? 82 : 78, 4, 6);
+    ctx.fillRect(26, lf === 0 ? 82 : 78, 4, 6);
+    ctx.fillRect(50, lf === 0 ? 78 : 82, 4, 6);
+    ctx.fillRect(56, lf === 0 ? 78 : 82, 4, 6);
+    ctx.fillRect(62, lf === 0 ? 78 : 82, 4, 6);
+
+    // Парящие огоньки вокруг
     ctx.fillStyle = '#ff2020';
-    ctx.fillRect(2, 66, 2, 6);
-    ctx.fillRect(6, 66, 2, 6);
-    ctx.fillRect(68, 66, 2, 6);
-    ctx.fillRect(72, 66, 2, 6);
-    // Ноги
-    ctx.fillStyle = cd;
-    ctx.fillRect(16, 72, 14, 10);
-    ctx.fillRect(48, 72, 14, 10);
+    ctx.fillRect(-4 + flick * 8, 18, 2, 2);
+    ctx.fillRect(78 - flick * 6, 28, 2, 2);
+    ctx.fillRect(2 + flick * 4, 56, 2, 2);
+    ctx.fillRect(76 - flick * 4, 60, 2, 2);
   }
 
   function drawChaser(c) {
@@ -5036,15 +6615,13 @@ document.addEventListener('click', lockOrientation, { once: true });
 
   function drawOdessa() {
     ctx.save();
-    const bgY = GROUND_Y - 2;
-    // Градиент заднего фона земли: вверху как передний фон, внизу чёрный
+    const bgY = HORIZON_Y - 2;
+    // Градиент заднего фона земли от горизонта вниз: сверху цвет земли, внизу чёрный
     const grd = ctx.createLinearGradient(0, bgY, 0, H);
     grd.addColorStop(0, ground());
     grd.addColorStop(1, '#000000');
     ctx.fillStyle = grd;
     ctx.fillRect(0, bgY, W, H - bgY);
-    ctx.fillStyle = groundLine();
-    ctx.fillRect(0, bgY, W, 1);
     ctx.globalAlpha = 0.55;
     const landmarks = STAGE_LANDMARKS[bgStage % STAGE_LANDMARKS.length];
     for (const lm of landmarks) {
@@ -5052,7 +6629,7 @@ document.addEventListener('click', lockOrientation, { once: true });
         const xx = lm.x + odessaOffset + pass * ODESSA_LOOP;
         if (xx > W + 30 || xx < -200) continue;
         const drawer = STAGE_DRAWERS[lm.type];
-        if (drawer) drawer(xx, GROUND_Y);
+        if (drawer) drawer(xx, HORIZON_Y);
       }
     }
     ctx.restore();
@@ -5916,6 +7493,65 @@ document.addEventListener('click', lockOrientation, { once: true });
       ctx.fillText('BOSS', W / 2, hy + 22);
       ctx.textAlign = 'left';
     }
+    // Прогресс-шкала: от жизней (слева) до очков (справа), с бегущим человечком
+    const TOTAL_BOSSES = 19;
+    const progress = Math.min(bossDefeated, TOTAL_BOSSES);
+    // Левая граница - после 3 сердец (15 + 3*22 = 81)
+    const livesEndX = 15 + 3 * 22 + 8;
+    // Правая граница - до счётчика очков (W - 15 - текст счёта)
+    // Текст счёта: "HI 00000   00000" - 17 символов * ~10 пикс bold = ~170 пикс
+    const scoreStartX = W - 180;
+    const barX = livesEndX;
+    const barW = scoreStartX - barX;
+    const barY = 18;
+
+    // Тонкая линия-шкала с делениями
+    const tickColor = text();
+    // Основная линия
+    ctx.fillStyle = tickColor;
+    ctx.fillRect(barX, barY, barW, 1);
+    // Деления (TOTAL_BOSSES + 1 точек включая начало и конец)
+    for (let i = 0; i <= TOTAL_BOSSES; i++) {
+      const tx = barX + (i / TOTAL_BOSSES) * barW;
+      const tickH = (i % 5 === 0) ? 4 : 2;
+      ctx.fillRect(tx, barY - tickH, 1, tickH);
+    }
+
+    // Заполнение - закрашенная часть слева до текущего прогресса
+    const fillW = (progress / TOTAL_BOSSES) * barW;
+    if (fillW > 0) {
+      ctx.fillStyle = '#5a9a30';
+      ctx.fillRect(barX, barY - 2, fillW, 3);
+    }
+
+    // Бегущий человечек - под концом заполнения
+    const runX = Math.floor(barX + fillW);
+    const runY = barY + 4;
+    // Простой пиксельный бегунок (силуэт человека сбоку)
+    ctx.fillStyle = tickColor;
+    // Голова
+    ctx.fillRect(runX - 2, runY, 4, 3);
+    // Тело
+    ctx.fillRect(runX - 2, runY + 3, 4, 4);
+    // Анимация ног - чередование по frameCount
+    const runFrame = Math.floor(frameCount / 6) % 2;
+    if (runFrame === 0) {
+      // Кадр 1: ноги в шаге
+      ctx.fillRect(runX - 3, runY + 7, 2, 3);
+      ctx.fillRect(runX + 1, runY + 7, 2, 3);
+    } else {
+      // Кадр 2: ноги вместе
+      ctx.fillRect(runX - 1, runY + 7, 1, 3);
+      ctx.fillRect(runX, runY + 7, 1, 3);
+    }
+    // Руки в движении
+    if (runFrame === 0) {
+      ctx.fillRect(runX - 3, runY + 4, 1, 2);
+      ctx.fillRect(runX + 2, runY + 4, 1, 2);
+    } else {
+      ctx.fillRect(runX - 3, runY + 5, 1, 2);
+      ctx.fillRect(runX + 2, runY + 3, 1, 2);
+    }
   }
 
   function drawReady() {
@@ -5935,14 +7571,14 @@ document.addEventListener('click', lockOrientation, { once: true });
     // НЕБО над водой
     ctx.fillStyle = '#b8e0ff';
     ctx.fillRect(focusXStart - W * 2, focusYStart - H * 2, W * 4, waterY - (focusYStart - H * 2));
-    // Облака
+    // Облака - все на одном Y уровне
     ctx.fillStyle = 'rgba(255,255,255,0.7)';
     const cloudOff = (tt * 0.1) % 180;
+    const cloudY = waterY - 95;
     for (let i = -3; i < 4; i++) {
       const cx = focusXStart + i * 180 + cloudOff;
-      const cy = waterY - 80 - (i % 2) * 30;
-      ctx.fillRect(cx, cy, 30, 8);
-      ctx.fillRect(cx + 6, cy - 4, 18, 4);
+      ctx.fillRect(cx, cloudY, 30, 8);
+      ctx.fillRect(cx + 6, cloudY - 4, 18, 4);
     }
     // Солнце
     ctx.fillStyle = 'rgba(255,240,180,0.6)';
@@ -6118,9 +7754,9 @@ document.addEventListener('click', lockOrientation, { once: true });
       // Стираем нижнюю часть водой/землёй ниже линии земли в обычной игре
       ctx.fillStyle = 'rgba(184,224,255,' + onLandT + ')';
       ctx.fillRect(focusX - W * 2, focusY - H * 2, W * 4, GROUND_Y - 2 - (focusY - H * 2));
-      ctx.fillStyle = 'rgba(138,106,58,' + onLandT + ')';
+      ctx.fillStyle = 'rgba(230,201,138,' + onLandT + ')';
       ctx.fillRect(focusX - W * 2, GROUND_Y - 2, W * 4, H * 2);
-      ctx.fillStyle = 'rgba(212,168,136,' + onLandT + ')';
+      ctx.fillStyle = 'rgba(138,100,54,' + onLandT + ')';
       ctx.fillRect(focusX - W * 2, GROUND_Y - 2, W * 4, 2);
     }
     // Слева ещё видна вода после выхода
@@ -6322,35 +7958,39 @@ document.addEventListener('click', lockOrientation, { once: true });
   }
 
   function drawOutro() {
+    // OUTRO - точное обращение INTRO:
+    // Фаза 0 (t 0..0.10): ящерица на земле в полном размере (zoom=1)
+    // Фаза 1 (t 0.10..0.40): камера зумится с 1× до 4.5×, фокусируясь на ящерице
+    // Фаза 2 (t 0.40..0.60): ящерица превращается в рыбу (drawIntroFishToLizard с t от 1 до 0)
+    //                       одновременно земля плавно становится водой
+    // Фаза 3 (t 0.60..0.72): рыба прыгает в воду по дуге со всплеском
+    // Фаза 4 (t 0.72..0.85): рыба ныряет вниз
+    // Фаза 5 (t 0.85..1.00): подводная сцена + появляется текст Congratulations
     const t = 1 - outroTimer / OUTRO_LEN;
     const ease = (x) => x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
     const smooth = (x) => x * x * (3 - 2 * x);
 
-    // Этапы (в обратном порядке от intro):
-    // 0.00-0.20: камера плавно зумится с 1× до 4.5×, фокус смещается к точке погружения
-    // 0.20-0.40: ящерица превращается обратно в рыбу
-    // 0.40-0.55: рыба прыгает в воду (короткая дуга)
-    // 0.55-0.85: рыба погружается в глубину, плывёт
-    // 0.85-1.00: появляется текст
-    // outroTimer == 0: финальный кадр держится бесконечно (текст + рыба)
-
-    const focusXEnd = DINO_X + 22;
-    const focusYEnd = GROUND_Y + 30;
-    const focusXStart = W / 2;
+    // Фокус камеры - обратное от intro
+    const focusXEnd = DINO_X + 22;       // финальная точка - под водой
+    const focusYEnd = GROUND_Y - 4;
+    const focusXStart = W / 2;            // стартовая точка - на земле, обычный вид
     const focusYStart = H / 2;
 
-    // Зум и фокус - в первой четверти плавно входим в подводную сцену
-    let zoom, focusX, focusY;
-    if (t < 0.20) {
-      const zt = smooth(t / 0.20);
-      zoom = 1 + zt * 3.5; // 1 → 4.5
-      focusX = focusXStart + (focusXEnd - focusXStart) * zt;
-      focusY = focusYStart + (focusYEnd - focusYStart) * zt;
-    } else {
-      zoom = 4.5;
-      focusX = focusXEnd;
-      focusY = focusYEnd;
-    }
+    // Фокус интерполируется в фазе 1 (0.10..0.40)
+    let camProg;
+    if (t < 0.10) camProg = 0;
+    else if (t < 0.40) camProg = smooth((t - 0.10) / 0.30);
+    else camProg = 1;
+    const focusX = focusXStart + (focusXEnd - focusXStart) * camProg;
+    const focusY = focusYStart + (focusYEnd - focusYStart) * camProg;
+
+    // Зум - обратный intro: 1 → 4.5 в фазе 1
+    let zoom;
+    if (t < 0.10) zoom = 1;
+    else if (t < 0.40) {
+      const zt = smooth((t - 0.10) / 0.30);
+      zoom = 1 + zt * 3.5;
+    } else zoom = 4.5;
 
     ctx.save();
     ctx.translate(W / 2, H / 2);
@@ -6359,58 +7999,68 @@ document.addEventListener('click', lockOrientation, { once: true });
 
     const waterY = GROUND_Y - 4;
 
-    // === ФОН ===
-    // В первой фазе ещё видна обычная игра (берег), потом всё переходит к подводному
+    // === ФОН - обратный переход от земли к подводному ===
+    // onLandT: 1 = только земля видна, 0 = только подводный мир
     let onLandT;
-    if (t < 0.40) onLandT = 1; // на земле
-    else if (t < 0.55) onLandT = 1 - ease((t - 0.40) / 0.15); // переход к воде
-    else onLandT = 0; // под водой
+    if (t < 0.40) onLandT = 1;
+    else if (t < 0.60) onLandT = 1 - ease((t - 0.40) / 0.20);
+    else onLandT = 0;
 
-    // Подводный синий
-    ctx.fillStyle = '#0a2040';
-    ctx.fillRect(focusX - W * 2, focusY - H * 2, W * 4, H * 4);
-    // Накладываем небо/землю с alpha = onLandT
-    if (onLandT > 0) {
-      ctx.fillStyle = 'rgba(184,224,255,' + onLandT + ')';
-      ctx.fillRect(focusX - W * 2, focusY - H * 2, W * 4, waterY - (focusY - H * 2));
-      ctx.fillStyle = 'rgba(138,106,58,' + onLandT + ')';
-      ctx.fillRect(focusX - W * 2, GROUND_Y - 2, W * 4, H * 2);
-      ctx.fillStyle = 'rgba(212,168,136,' + onLandT + ')';
-      ctx.fillRect(focusX - W * 2, GROUND_Y - 2, W * 4, 2);
-    }
-    // Небо над водой - всегда
+    // НЕБО над водой
+    ctx.fillStyle = '#b8e0ff';
+    ctx.fillRect(focusX - W * 2, focusY - H * 2, W * 4, waterY - (focusY - H * 2));
+    // Облака - видны всегда сверху воды
     if (onLandT < 1) {
-      // Линия поверхности воды
-      ctx.fillStyle = 'rgba(64,128,192,' + (1 - onLandT) + ')';
-      ctx.fillRect(focusX - W * 2, waterY, W * 4, 3);
-      // Лучи света через поверхность
+      ctx.fillStyle = 'rgba(255,255,255,' + (0.7 * (1 - onLandT)) + ')';
+      const cloudOff = (frameCount * 0.1) % 180;
+      const cloudY = waterY - 95;
+      for (let i = -3; i < 4; i++) {
+        const cx = focusX + i * 180 + cloudOff;
+        ctx.fillRect(cx, cloudY, 30, 8);
+        ctx.fillRect(cx + 6, cloudY - 4, 18, 4);
+      }
+      ctx.fillStyle = 'rgba(255,240,180,' + (0.6 * (1 - onLandT)) + ')';
+      ctx.beginPath();
+      ctx.arc(focusX + 60, waterY - 110, 12, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // ВОДА ниже waterY
+    ctx.fillStyle = '#0a2040';
+    ctx.fillRect(focusX - W * 2, waterY, W * 4, H * 4);
+    // Поверхность
+    ctx.fillStyle = '#4080c0';
+    ctx.fillRect(focusX - W * 2, waterY, W * 4, 3);
+    // Лучи света
+    if (onLandT < 1) {
       const lightAlpha = 0.20 * (1 - onLandT);
       ctx.fillStyle = 'rgba(180,220,255,' + lightAlpha + ')';
-      const lightOff = (outroTimer * 0.2) % 30;
+      const lightOff = (frameCount * 0.2) % 30;
       for (let i = -10; i < 10; i++) {
-        const lx = focusXEnd + i * 30 + lightOff;
+        const lx = focusX + i * 30 + lightOff;
         ctx.fillRect(lx, waterY + 4, 2, 200);
       }
-    }
-    // Облака и небо над водой когда мы под водой
-    if (t > 0.55) {
-      ctx.fillStyle = '#b8e0ff';
-      ctx.fillRect(focusX - W * 2, focusY - H * 2, W * 4, waterY - (focusY - H * 2));
-      ctx.fillStyle = 'rgba(255,255,255,0.7)';
-      const cloudOff = (outroTimer * 0.1) % 180;
-      for (let i = -3; i < 4; i++) {
-        const cx = focusXEnd + i * 180 + cloudOff;
-        const cy = waterY - 80 - (i % 2) * 30;
-        ctx.fillRect(cx, cy, 30, 8);
-        ctx.fillRect(cx + 6, cy - 4, 18, 4);
+      // Рябь
+      ctx.fillStyle = 'rgba(180,220,255,' + (0.7 * (1 - onLandT)) + ')';
+      for (let x = -W; x < W; x += 8) {
+        const wY = waterY + Math.sin((x + frameCount * 0.5) * 0.1) * 1;
+        ctx.fillRect(focusX + x, wY, 4, 1);
       }
     }
+    // ЗЕМЛЯ - видна когда onLandT > 0
+    if (onLandT > 0) {
+      ctx.fillStyle = 'rgba(184,224,255,' + onLandT + ')';
+      ctx.fillRect(focusX - W * 2, focusY - H * 2, W * 4, GROUND_Y - (focusY - H * 2));
+      ctx.fillStyle = 'rgba(230,201,138,' + onLandT + ')';
+      ctx.fillRect(focusX - W * 2, GROUND_Y, W * 4, H * 2);
+      ctx.fillStyle = 'rgba(138,100,54,' + onLandT + ')';
+      ctx.fillRect(focusX - W * 2, GROUND_Y, W * 4, 2);
+    }
 
-    // === ПУЗЫРИ - в фазе погружения ===
-    if (t > 0.40) {
-      const bubbleAlpha = Math.min(1, (t - 0.40) / 0.10);
+    // === ПУЗЫРИ В ВОДЕ - появляются когда сцена становится подводной ===
+    if (t > 0.55) {
+      const bubbleAlpha = Math.min(1, (t - 0.55) / 0.10);
       for (const bb of introBubbles) {
-        const bx = focusXEnd + (bb.x - W / 2) * 0.5;
+        const bx = focusX + (bb.x - W / 2) * 0.5;
         const by = waterY + 5 + ((bb.y % 200) / 200) * 145;
         ctx.strokeStyle = 'rgba(220,240,255,' + (0.7 * bubbleAlpha) + ')';
         ctx.lineWidth = 1;
@@ -6426,91 +8076,113 @@ document.addEventListener('click', lockOrientation, { once: true });
       }
     }
 
-    // === ПЕРСОНАЖ ===
-    if (t < 0.20) {
-      // Ящерица в обычной позиции, камера зумится к ней
+    // === ЯЩЕРИЦА / РЫБА - обратная последовательность ===
+    if (t < 0.10) {
+      // Фаза 0: ящерица в полном размере (zoom=1) - стандартный спрайт игры
       drawLizard();
     } else if (t < 0.40) {
-      // Трансформация ящерица → рыба (обратное превращение)
-      const morphT = ease((t - 0.20) / 0.20);
-      // morphT идёт от 0 (ящерица) до 1 (рыба) - используем drawIntroFishToLizard с инвертированным t
-      const fx = focusXEnd;
-      const fy = GROUND_Y - 8;
-      drawIntroFishToLizard(fx, fy, 1 - morphT);
-    } else if (t < 0.55) {
-      // Рыба прыгает в воду
-      const jumpT = ease((t - 0.40) / 0.15);
-      const sx = focusXEnd, sy = GROUND_Y - 8;
-      const ex = focusXEnd - 12, ey = waterY + 8;
+      // Фаза 1: ящерица сидит, камера зумится - тот же спрайт что в RUN
+      drawLizard();
+    } else if (t < 0.60) {
+      // Фаза 2: трансформация ящерицы в рыбу (t от 1 до 0)
+      // cy подобрано так чтобы низ существа совпадал с GROUND_Y (как у drawLizard)
+      const flopT = 1 - ease((t - 0.40) / 0.20);
+      const fx = dino.x + dino.w / 2;
+      const fy = GROUND_Y - 12; // низ ног при t=1: cy + 12 = GROUND_Y
+      drawIntroFishToLizard(fx, fy, flopT);
+    } else if (t < 0.72) {
+      // Фаза 3: рыба прыгает в воду (обратная дуга)
+      const jumpT = ease((t - 0.60) / 0.12);
+      const sx = dino.x + dino.w / 2, sy = GROUND_Y - 12;
+      const ex = focusX - 12, ey = waterY + 8;
       const linX = sx + (ex - sx) * jumpT;
       const linY = sy + (ey - sy) * jumpT;
-      const arc = -Math.sin(jumpT * Math.PI) * 25;
+      const arc = -Math.sin(jumpT * Math.PI) * 35;
       const fishX = linX;
       const fishY = linY + arc;
-      const rotation = Math.PI * 0.35 - jumpT * Math.PI * 0.7; // переворачивается носом вниз
+      const rotation = (1 - jumpT) * Math.PI * 0.35;
       drawIntroFish(fishX, fishY, true, rotation);
-      // Брызги при входе в воду в конце прыжка
-      if (jumpT > 0.85) {
-        const splashT = (jumpT - 0.85) / 0.15;
+      // Брызги при входе в воду (в конце прыжка)
+      if (jumpT > 0.75) {
+        const splashT = (jumpT - 0.75) / 0.25;
         ctx.fillStyle = 'rgba(180,220,255,' + (0.9 * (1 - splashT)) + ')';
         for (let i = 0; i < 8; i++) {
           const ang = -Math.PI / 2 - 0.7 + (i / 8) * 1.4;
           const dist = splashT * 50;
-          ctx.fillRect(ex + Math.cos(ang) * dist, waterY + Math.sin(ang) * dist - 2, 2, 2);
+          ctx.fillRect(ex + Math.cos(ang) * dist, waterY + Math.sin(ang) * dist - 5, 2, 2);
         }
       }
     } else if (t < 0.85) {
-      // Рыба погружается и плавает на глубину
-      const swimT = ease((t - 0.55) / 0.30);
-      const sx = focusXEnd - 12, sy = waterY + 8;
-      // Плывёт вглубь и в сторону
-      const ex = focusXEnd - 32, ey = focusYEnd + 5;
-      const baseX = sx + (ex - sx) * swimT;
-      const baseY = sy + (ey - sy) * swimT;
-      const wobbleAmp = swimT;
-      const fishX = baseX + Math.sin(outroTimer * 0.10) * 6 * wobbleAmp;
-      const fishY = baseY + Math.sin(outroTimer * 0.08) * 3 * wobbleAmp;
-      const wag = Math.sin(outroTimer * 0.10) * 0.10;
+      // Фаза 4: рыба ныряет вниз
+      const swimT = ease((t - 0.72) / 0.13);
+      const sx = focusX - 12, sy = waterY + 8;
+      const ex = focusX - 32, ey = focusYEnd + 30;
+      const fishX = sx + (ex - sx) * swimT;
+      const fishY = sy + (ey - sy) * swimT;
+      const wag = Math.sin(frameCount * 0.12) * 0.15;
       drawIntroFish(fishX, fishY, false, wag);
     } else {
-      // Рыба плавает спокойно в глубине - финальная позиция
-      const fishX = focusXEnd - 32 + Math.sin(outroTimer * 0.02) * 12;
-      const fishY = focusYEnd + 5 + Math.sin(outroTimer * 0.04) * 5;
-      const wag = Math.sin(outroTimer * 0.08) * 0.08;
+      // Фаза 5: рыба плавает под водой (как в начальной сцене)
+      const baseX = focusX - 32;
+      const baseY = focusYEnd + 30;
+      const fishX = baseX + Math.sin(frameCount * 0.02) * 12;
+      const fishY = baseY + Math.sin(frameCount * 0.04) * 5;
+      const wag = Math.sin(frameCount * 0.08) * 0.08;
       drawIntroFish(fishX, fishY, false, wag);
     }
 
     ctx.restore();
 
-    // === ТЕКСТ - появляется в самом конце и держится ===
-    if (t > 0.80) {
-      const textAlpha = Math.min(1, (t - 0.80) / 0.15);
+    // === ТЕКСТ Congratulations - появляется в фазе 5 ===
+    if (t > 0.85) {
+      const textAlpha = Math.min(1, (t - 0.85) / 0.10);
       ctx.save();
-      ctx.font = 'bold 36px "Courier New", monospace';
       ctx.textAlign = 'center';
-      // Тень
-      ctx.fillStyle = 'rgba(0,40,80,' + (0.7 * textAlpha) + ')';
-      ctx.fillText('Congratulations!', W / 2 + 2, 80 + 2);
-      // Градиент морской волны
-      const titleGrd = ctx.createLinearGradient(0, 50, 0, 90);
-      titleGrd.addColorStop(0, '#ffe080');
-      titleGrd.addColorStop(0.5, '#ffa040');
-      titleGrd.addColorStop(1, '#a04020');
+      ctx.textBaseline = 'middle';
+
+      const titleY = 80;
+      ctx.font = 'bold 56px "Courier New", monospace';
+      ctx.fillStyle = 'rgba(0,40,80,' + (0.5 * textAlpha) + ')';
+      ctx.fillText('Congratulations!', W / 2 + 2, titleY + 2);
+      const titleGrd = ctx.createLinearGradient(0, titleY - 30, 0, titleY + 30);
+      titleGrd.addColorStop(0, '#a8e8ff');
+      titleGrd.addColorStop(0.5, '#40c0e0');
+      titleGrd.addColorStop(1, '#1060a0');
       ctx.fillStyle = titleGrd;
       ctx.globalAlpha = textAlpha;
-      ctx.fillText('Congratulations!', W / 2, 80);
-      // Контур
+      ctx.fillText('Congratulations!', W / 2, titleY);
       ctx.strokeStyle = '#0a2040';
       ctx.lineWidth = 2;
-      ctx.strokeText('Congratulations!', W / 2, 80);
-      // Подзаголовок - в две строки
-      ctx.font = '18px "Courier New", monospace';
-      ctx.fillStyle = '#fff';
+      ctx.strokeText('Congratulations!', W / 2, titleY);
+
+      const sub1Y = 150;
+      const sub2Y = 195;
+      ctx.font = 'bold 28px "Courier New", monospace';
+      ctx.fillStyle = 'rgba(0,40,80,' + (0.5 * textAlpha) + ')';
+      ctx.fillText('After all your struggles,', W / 2 + 2, sub1Y + 2);
+      ctx.fillText('you ended up right where you started.', W / 2 + 2, sub2Y + 2);
+      const subGrd1 = ctx.createLinearGradient(0, sub1Y - 16, 0, sub1Y + 16);
+      subGrd1.addColorStop(0, '#a8e8ff');
+      subGrd1.addColorStop(0.5, '#40c0e0');
+      subGrd1.addColorStop(1, '#1060a0');
+      ctx.fillStyle = subGrd1;
       ctx.globalAlpha = textAlpha;
-      ctx.fillText('After all your struggles,', W / 2, 120);
-      ctx.fillText('you ended up right where you started.', W / 2, 145);
+      ctx.fillText('After all your struggles,', W / 2, sub1Y);
+      ctx.strokeStyle = '#0a2040';
+      ctx.lineWidth = 1.5;
+      ctx.strokeText('After all your struggles,', W / 2, sub1Y);
+      const subGrd2 = ctx.createLinearGradient(0, sub2Y - 16, 0, sub2Y + 16);
+      subGrd2.addColorStop(0, '#a8e8ff');
+      subGrd2.addColorStop(0.5, '#40c0e0');
+      subGrd2.addColorStop(1, '#1060a0');
+      ctx.fillStyle = subGrd2;
+      ctx.globalAlpha = textAlpha;
+      ctx.fillText('you ended up right where you started.', W / 2, sub2Y);
+      ctx.strokeText('you ended up right where you started.', W / 2, sub2Y);
+
       ctx.restore();
       ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
     }
   }
 
@@ -6544,16 +8216,41 @@ document.addEventListener('click', lockOrientation, { once: true });
     for (const c of comets) drawComet(c);
     drawSunMoon();
     drawOdessa();
+    // Поезд на заднем плане - перед облаками, после силуэта Одессы
+    drawTrain();
     // Чёрный обелиск на среднем плане - появляется после победы над боссом.
-    // Стоит ниже уровня заднего фона на 20 пикселей (как будто за горизонтом)
     if (monolith) {
-      const baseY = GROUND_Y + 5;      // чуть погружён ниже линии заднего плана
+      const baseY = GROUND_Y - 35;
       const topY = baseY - monolith.h;
       // Определяем где солнце (для блика)
-      // dayPhase: 0.03-0.58 - солнце на небе. 0.03 = справа на горизонте, 0.305 = в зените, 0.58 = слева
       const sunOnRight = dayPhase < 0.305 && dayPhase > 0.03;
       const sunOnLeft = dayPhase > 0.305 && dayPhase < 0.58;
       const sunUp = dayPhase > 0.03 && dayPhase < 0.58;
+
+      // ТЕНЬ обелиска - длинный эллипс от подножия, направление от солнца
+      if (sunUp) {
+        ctx.save();
+        const shadowDir = sunOnRight ? -1 : 1;
+        const sunHeight = Math.sin((dayPhase - 0.03) / 0.55 * Math.PI);
+        const shadowLen = monolith.h * (0.75 + (1 - sunHeight) * 2);
+        const shadowAlpha = 0.35 + sunHeight * 0.25;
+        ctx.fillStyle = 'rgba(0,0,10,' + shadowAlpha + ')';
+        // Тень от подножия обелиска (baseY), не от уровня земли
+        const shadowBaseX = monolith.x + monolith.w / 2;
+        const shadowBaseY = baseY; // у подножия обелиска
+        const shadowEndX = shadowBaseX + shadowDir * shadowLen;
+        const shadowWidthBase = monolith.w * 0.9;
+        const shadowWidthEnd = monolith.w * 0.4;
+        ctx.beginPath();
+        ctx.moveTo(shadowBaseX - shadowWidthBase / 2, shadowBaseY);
+        ctx.lineTo(shadowBaseX + shadowWidthBase / 2, shadowBaseY);
+        ctx.lineTo(shadowEndX + shadowWidthEnd / 2, shadowBaseY + 3);
+        ctx.lineTo(shadowEndX - shadowWidthEnd / 2, shadowBaseY + 3);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+
       // Тёмная тень-фон
       ctx.fillStyle = '#1a1a22';
       ctx.fillRect(monolith.x + 2, topY + 2, monolith.w, monolith.h);
@@ -6807,7 +8504,10 @@ document.addEventListener('click', lockOrientation, { once: true });
   }
 
   function updateOutro() {
+    frameCount++; // обеспечиваем анимации (облака, рыба, лучи света) во время outro
     if (outroTimer > 0) outroTimer--;
+    // Тикаем планировщик бесконечной outro музыки
+    tickOutroMusic();
     // Спавняем пузырьки в фазе погружения
     const t = 1 - outroTimer / OUTRO_LEN;
     if (t > 0.4 && outroTimer % 4 === 0) {
@@ -6838,6 +8538,11 @@ document.addEventListener('click', lockOrientation, { once: true });
     } else if (state === STATE.READY) {
       // Анимация READY-экрана: рыба плавает, пузыри
       frameCount++;
+      // Запуск/тик мутирующей funk музыки на READY экране
+      if (audioCtx) {
+        if (readyNextScheduleAt === 0) startReadyMusic();
+        else tickReadyMusic();
+      }
       // Спавним пузыри так же как в intro
       if (frameCount % 3 === 0) {
         introBubbles.push({
