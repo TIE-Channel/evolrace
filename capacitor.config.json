@@ -1,0 +1,169 @@
+name: Build Capacitor APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install npm dependencies
+        run: |
+          npm install
+
+      - name: Prepare web content (copy to www/)
+        run: |
+          node build-www.js
+          echo "=== www/ contents ==="
+          ls -la www/
+
+      - name: Add Android platform to Capacitor
+        run: |
+          npx cap add android
+          echo "=== android/ structure ==="
+          find android -maxdepth 2 -type d | head -20
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Configure AdMob in AndroidManifest
+        run: |
+          # Capacitor генерирует AndroidManifest.xml. Добавляем AdMob App ID
+          ANDROID_MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+          # Тестовый AdMob App ID (Google публичный): ca-app-pub-3940256099942544~3347511713
+          # Замените на ваш реальный AdMob App ID для production
+          ADMOB_APP_ID="ca-app-pub-3940256099942544~3347511713"
+
+          # Добавляем meta-data в <application> блок если ещё нет
+          if ! grep -q "com.google.android.gms.ads.APPLICATION_ID" "$ANDROID_MANIFEST"; then
+            sed -i "/<application/,/>/ {
+              /android:theme/a\\        <meta-data android:name=\"com.google.android.gms.ads.APPLICATION_ID\" android:value=\"$ADMOB_APP_ID\"/>
+            }" "$ANDROID_MANIFEST"
+          fi
+
+          echo "=== AndroidManifest.xml ==="
+          cat "$ANDROID_MANIFEST"
+
+      - name: Generate signing keystore
+        run: |
+          keytool -genkeypair \
+            -dname "cn=Evolrace, ou=Apps, o=TieChannel, c=US" \
+            -alias evolrace \
+            -keypass android \
+            -keystore android/app/evolrace.keystore \
+            -storepass android \
+            -validity 20000 \
+            -keyalg RSA \
+            -keysize 2048
+
+      - name: Print signing fingerprint
+        run: |
+          keytool -list -v \
+            -keystore android/app/evolrace.keystore \
+            -alias evolrace \
+            -storepass android \
+            -keypass android | grep -E "SHA256:" | head -1
+
+      - name: Configure Gradle for CI
+        working-directory: android
+        run: |
+          cat > gradle.properties << 'GRADLEEOF'
+          org.gradle.jvmargs=-Xmx6144m -XX:MaxMetaspaceSize=2048m -Dfile.encoding=UTF-8
+          org.gradle.parallel=true
+          org.gradle.caching=true
+          org.gradle.daemon=false
+          org.gradle.workers.max=2
+          android.useAndroidX=true
+          android.enableJetifier=false
+          GRADLEEOF
+          cat gradle.properties
+
+      - name: Build APK
+        working-directory: android
+        timeout-minutes: 60
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file=$(pwd)/app/evolrace.keystore \
+            -Pandroid.injected.signing.store.password=android \
+            -Pandroid.injected.signing.key.alias=evolrace \
+            -Pandroid.injected.signing.key.password=android \
+            --no-daemon \
+            --build-cache
+
+      - name: Build AAB
+        working-directory: android
+        timeout-minutes: 30
+        run: |
+          ./gradlew bundleRelease \
+            -Pandroid.injected.signing.store.file=$(pwd)/app/evolrace.keystore \
+            -Pandroid.injected.signing.store.password=android \
+            -Pandroid.injected.signing.key.alias=evolrace \
+            -Pandroid.injected.signing.key.password=android \
+            --no-daemon \
+            --build-cache
+
+      - name: Find generated artifacts
+        if: always()
+        run: |
+          echo "=== APKs ==="
+          find android -name "*.apk" -type f 2>/dev/null
+          echo "=== AABs ==="
+          find android -name "*.aab" -type f 2>/dev/null
+
+      - name: Upload APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evolrace-apk-capacitor
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload AAB
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evolrace-aab-capacitor
+          path: android/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload build logs (для диагностики)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-logs
+          path: |
+            android/app/build/reports/
+            android/build/reports/
+          if-no-files-found: ignore
+          retention-days: 7
