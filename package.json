@@ -1,22 +1,52 @@
 {
-  "name": "evolrace",
-  "version": "1.0.0",
-  "description": "Pixel-art rhythm runner mobile game",
-  "main": "index.html",
-  "scripts": {
-    "cap:add": "npx cap add android",
-    "cap:sync": "npx cap sync android",
-    "cap:open": "npx cap open android"
-  },
-  "dependencies": {
-    "@capacitor/android": "^6.1.0",
-    "@capacitor/core": "^6.1.0",
-    "@capacitor/device": "^6.0.0",
-    "@capacitor/splash-screen": "^6.0.0",
-    "@capacitor/status-bar": "^6.0.0",
-    "@capacitor-community/admob": "^6.0.0"
-  },
-  "devDependencies": {
-    "@capacitor/cli": "^6.1.0"
-  }
+  "name": "Evolrace",
+  "short_name": "Evolrace",
+  "description": "Pixel-art rhythm runner with evolving hero, 10 epic bosses and procedural music",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone", "minimal-ui", "browser"],
+  "orientation": "landscape",
+  "background_color": "#000000",
+  "theme_color": "#b8e0ff",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["games", "entertainment"],
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "screenshot-1280x720.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Evolrace gameplay"
+    },
+    {
+      "src": "screenshot-1280x720.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Evolrace gameplay"
+    }
+  ]
 }
