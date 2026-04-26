@@ -5,12 +5,14 @@
   "start_url": "./",
   "scope": "./",
   "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone", "minimal-ui", "browser"],
   "orientation": "landscape",
   "background_color": "#000000",
   "theme_color": "#b8e0ff",
   "lang": "en",
   "dir": "ltr",
   "categories": ["games", "entertainment"],
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "icon-192.png",
@@ -43,6 +45,7 @@
       "src": "screenshot-1280x720.png",
       "sizes": "1280x720",
       "type": "image/png",
+      "form_factor": "narrow",
       "label": "Evolrace gameplay"
     }
   ]
