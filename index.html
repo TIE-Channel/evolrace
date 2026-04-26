@@ -21,13 +21,17 @@
   html, body {
     width: 100%;
     height: 100%;
-    background: #000;
+    background: #b8e0ff;
     font-family: "Courier New", monospace;
     user-select: none;
     -webkit-user-select: none;
     overflow: hidden;
     position: fixed;
     overscroll-behavior: none;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
   }
   .wrap {
     position: fixed;
@@ -40,8 +44,8 @@
     position: absolute;
     top: 0;
     left: 0;
-    width: 100%;
-    height: 100%;
+    width: 100% !important;
+    height: 100% !important;
     background: #b8e0ff;
     touch-action: manipulation;
   }
@@ -67,6 +71,33 @@
 </style>
 </head>
 <body>
+<!-- TIE Splash Screen - показывается 2.5 сек при запуске игры -->
+<div id="tie-splash" style="
+  position: fixed;
+  inset: 0;
+  background: #ffffff;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.6s ease-out;">
+  <div style="text-align: center;">
+    <img src="tie-logo.png" alt="TIE" style="max-width: 60vh; max-height: 80vh; height: auto;">
+    <div style="margin-top: 20px; font-family: 'Courier New', monospace; font-size: 14px; color: #666; letter-spacing: 2px;">
+      A GAME BY TIE-CHANNEL
+    </div>
+  </div>
+</div>
+<script>
+  // Скрываем splash через 2.5 сек
+  setTimeout(function() {
+    var splash = document.getElementById('tie-splash');
+    if (splash) {
+      splash.style.opacity = '0';
+      setTimeout(function() { splash.style.display = 'none'; }, 700);
+    }
+  }, 2500);
+</script>
 <div class="rotate-msg">
   <div>
     ROTATE YOUR DEVICE
@@ -98,10 +129,7 @@ document.addEventListener('click', lockOrientation, { once: true });
     const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) ? window.devicePixelRatio : 1;
     canvas.width = Math.ceil(winW * dpr);
     canvas.height = Math.ceil(winH * dpr);
-    if (canvas.style) {
-      canvas.style.width = winW + 'px';
-      canvas.style.height = winH + 'px';
-    }
+    // Не задаём canvas.style.width/height - используем CSS 100%/100% (избегаем 1px gap от дробного innerHeight)
     W = winW;
     H = winH;
     const oldGroundY = GROUND_Y;
@@ -7451,9 +7479,29 @@ document.addEventListener('click', lockOrientation, { once: true });
     ctx.fillRect(x + 90, y - 4, 3, 3);
     // Текст
     ctx.fillStyle = '#d02050';
-    ctx.font = 'bold 10px "Courier New", monospace';
     ctx.textAlign = 'center';
-    ctx.fillText('Соня, давай!', x + 50, y - 4);
+    // Имя игрока из localStorage (если задано) - "GO NAME!" или рандомные cheer-фразы
+    const playerName = (typeof localStorage !== 'undefined') ? localStorage.getItem('evolrace_player_name') : null;
+
+    let cheerText;
+    if (playerName) {
+      cheerText = 'GO ' + playerName + '!';
+    } else {
+      // Рандомизируем фразу - меняем раз в ~150 кадров (~2.5 сек)
+      const cheerVariants = ['GO GO GO!', 'YOU GOT THIS!', 'FASTER!', 'WOOHOO!', 'YEAH!', 'KEEP GOING!', 'JUMP!'];
+      const variantIdx = Math.floor((cr.cheerFrame || 0) / 150) % cheerVariants.length;
+      cheerText = cheerVariants[variantIdx];
+    }
+
+    // Auto-fit: подбираем размер шрифта чтобы текст влез в плакат (87px шириной с padding)
+    let fontSize = 10;
+    ctx.font = 'bold ' + fontSize + 'px "Courier New", monospace';
+    while (ctx.measureText(cheerText).width > 80 && fontSize > 5) {
+      fontSize -= 0.5;
+      ctx.font = 'bold ' + fontSize + 'px "Courier New", monospace';
+    }
+
+    ctx.fillText(cheerText, x + 50, y - 4);
     ctx.textAlign = 'left';
     // Прыгающие болельщики в центре
     const jump1 = (cr.cheerFrame % 24 < 12) ? 0 : -4;
@@ -8564,7 +8612,21 @@ document.addEventListener('click', lockOrientation, { once: true });
     // outroTimer стопится на 0 - финальный экран показывается до нажатия
   }
 
-  function loop() {
+  // FPS limiter - на дисплеях >60Hz (90/120/144Hz) пропускаем кадры чтобы игра не ускорялась
+  const TARGET_FRAME_TIME = 1000 / 60; // 16.67ms на кадр для 60fps
+  let lastFrameTimestamp = 0;
+
+  function loop(timestamp) {
+    if (timestamp === undefined) timestamp = 0;
+
+    // Ограничиваем частоту кадров до 60fps
+    const elapsed = timestamp - lastFrameTimestamp;
+    if (elapsed < TARGET_FRAME_TIME - 1) {
+      requestAnimationFrame(loop);
+      return;
+    }
+    lastFrameTimestamp = timestamp;
+
     if (state === STATE.INTRO) {
       updateIntro();
     } else if (state === STATE.OUTRO) {
@@ -8611,6 +8673,34 @@ document.addEventListener('click', lockOrientation, { once: true });
   font-size:13px;cursor:pointer;font-weight:bold;box-shadow:0 2px 6px rgba(0,0,0,0.4);">
   Remove Ads $1.99
 </button>
+
+<!-- Кнопка Change Name (показывается на READY экране) -->
+<button id="change-name-btn" style="display:none;position:fixed;top:10px;left:10px;z-index:1500;
+  padding:6px 10px;background:rgba(0,0,0,0.5);color:#fff;border:1px solid #fff;border-radius:4px;
+  font-family:sans-serif;font-size:11px;cursor:pointer;">
+  Name
+</button>
+
+<!-- Модал ввода имени игрока -->
+<div id="name-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);
+  z-index:5000;align-items:center;justify-content:center;flex-direction:column;padding:20px;">
+  <div style="background:#fff;padding:24px;border-radius:8px;max-width:340px;width:100%;
+    text-align:center;font-family:sans-serif;">
+    <h2 style="margin-bottom:12px;color:#333;font-size:18px;">Your name</h2>
+    <p style="color:#666;font-size:13px;margin-bottom:16px;">
+      The cheer squad poster will say "GO YOURNAME!"
+    </p>
+    <input id="name-input" type="text" maxlength="8" placeholder="Player"
+      style="width:100%;padding:10px;font-size:16px;border:2px solid #1060a0;border-radius:4px;
+      text-align:center;text-transform:uppercase;outline:none;margin-bottom:16px;">
+    <div style="display:flex;gap:8px;">
+      <button id="name-skip" style="flex:1;padding:10px;background:#ccc;color:#333;border:none;
+        border-radius:4px;font-size:14px;cursor:pointer;">Skip</button>
+      <button id="name-save" style="flex:1;padding:10px;background:#1060a0;color:#fff;border:none;
+        border-radius:4px;font-size:14px;cursor:pointer;font-weight:bold;">Save</button>
+    </div>
+  </div>
+</div>
 
 <!-- Уведомление "Спасибо за покупку" -->
 <div id="purchase-thanks" style="display:none;position:fixed;top:20px;left:50%;transform:translateX(-50%);
@@ -8708,7 +8798,7 @@ document.addEventListener('click', lockOrientation, { once: true });
       await AdMob.showBanner({
         adId: AD_IDS.banner,
         adSize: 'BANNER',           // 320x50
-        position: 'BOTTOM_CENTER',
+        position: 'TOP_CENTER',     // Сверху - не загораживает игровой HUD внизу
         margin: 0,
         isTesting: IS_TEST_MODE
       });
@@ -8843,14 +8933,19 @@ document.addEventListener('click', lockOrientation, { once: true });
         if (!adsRemoved) {
           removeAdsBtn.style.display = 'block';
         }
+        changeNameBtn.style.display = 'block';
       } else if (currentState === STATE.RUN) {
         // Скрываем баннер во время игры (чтобы не мешал)
         hideBannerAd();
         removeAdsBtn.style.display = 'none';
+        changeNameBtn.style.display = 'none';
       } else if (currentState === STATE.OVER && !adsRemoved) {
         // На OVER экране - снова баннер и кнопка
         if (isCapacitor) showBannerAd();
         removeAdsBtn.style.display = 'block';
+        changeNameBtn.style.display = 'none';
+      } else {
+        changeNameBtn.style.display = 'none';
       }
 
       lastGameState = currentState;
@@ -8882,6 +8977,103 @@ document.addEventListener('click', lockOrientation, { once: true });
 
     // Polling state каждые 200мс
     setInterval(checkGameState, 200);
+
+    // === Player name (для плаката группы поддержки) ===
+    setupPlayerName();
+  }
+
+  // === Имя игрока ===
+  const nameModal = document.getElementById('name-modal');
+  const nameInput = document.getElementById('name-input');
+  const nameSave = document.getElementById('name-save');
+  const nameSkip = document.getElementById('name-skip');
+  const changeNameBtn = document.getElementById('change-name-btn');
+
+  function showNameModal(initialValue) {
+    nameInput.value = initialValue || '';
+    nameModal.style.display = 'flex';
+    setTimeout(() => nameInput.focus(), 100);
+  }
+
+  function hideNameModal() {
+    nameModal.style.display = 'none';
+  }
+
+  function saveName() {
+    const name = nameInput.value.trim().toUpperCase().substring(0, 8);
+    if (name) {
+      localStorage.setItem('evolrace_player_name', name);
+      console.log('[Name] Saved:', name);
+    }
+    hideNameModal();
+  }
+
+  nameSave.addEventListener('click', saveName);
+  nameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') saveName();
+  });
+  nameSkip.addEventListener('click', hideNameModal);
+
+  changeNameBtn.addEventListener('click', () => {
+    const current = localStorage.getItem('evolrace_player_name') || '';
+    showNameModal(current);
+  });
+
+  // Извлекает имя пользователя из названия устройства
+  // Примеры:
+  //   "Sonya's iPhone" -> "SONYA"
+  //   "Andrew Galaxy" -> "ANDREW"
+  //   "iPhone 14 Pro" -> null (нет имени)
+  //   "Samsung Galaxy S22" -> null (нет имени)
+  function extractNameFromDevice(deviceName) {
+    if (!deviceName || typeof deviceName !== 'string') return null;
+
+    // Удаляем технические/брендовые слова и числа
+    let cleaned = deviceName
+      .replace(/['']s\b/gi, '')  // possessive 's
+      .replace(/\b(iPhone|iPad|iPod|Galaxy|Samsung|Xiaomi|Redmi|Huawei|Honor|OnePlus|Google|Pixel|Nokia|Sony|LG|Motorola|Moto|HTC|Phone|Mobile|Tablet|Pro|Plus|Mini|Max|Ultra|Lite|Note|Tab|Edge|Mate|SE)\b/gi, '')
+      .replace(/[\d.\-_+()]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (cleaned.length < 2) return null;
+
+    // Берём первое слово
+    const firstWord = cleaned.split(/\s+/)[0];
+    if (firstWord.length < 2 || firstWord.length > 15) return null;
+
+    // Проверяем что в слове есть буквы (не только спецсимволы)
+    if (!/[a-zA-Zа-яА-ЯёЁ]/.test(firstWord)) return null;
+
+    return firstWord.substring(0, 8).toUpperCase();
+  }
+
+  async function setupPlayerName() {
+    // Если имя уже сохранено в localStorage - используем
+    if (localStorage.getItem('evolrace_player_name')) return;
+
+    // Пробуем получить из Device plugin (Capacitor)
+    if (window.Capacitor && window.Capacitor.Plugins.Device) {
+      try {
+        const info = await window.Capacitor.Plugins.Device.getInfo();
+        console.log('[Name] Device info:', info);
+
+        if (info.name) {
+          const extractedName = extractNameFromDevice(info.name);
+          if (extractedName) {
+            console.log('[Name] Extracted from device:', extractedName, 'from:', info.name);
+            localStorage.setItem('evolrace_player_name', extractedName);
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn('[Name] Device.getInfo error:', e);
+      }
+    }
+
+    // Не нашли имя - ничего не делаем, плакат покажет "GO!"
+    // Пользователь может задать через кнопку Name в углу
+    console.log('[Name] Could not auto-detect name, using default');
   }
 
   // Ждём deviceready событие от Capacitor (если в native app)
