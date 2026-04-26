@@ -47,7 +47,14 @@ jobs:
             npm-capacitor-v2-
 
       - name: Install npm dependencies
-        run: npm install
+        run: |
+          npm install
+          echo "=== Verifying Capacitor CLI ==="
+          ls -la node_modules/.bin/cap || echo "WARNING: cap not in .bin"
+          ls -la node_modules/@capacitor/cli/bin/capacitor || echo "WARNING: capacitor binary not found"
+          echo ""
+          echo "=== Installed packages ==="
+          npm list --depth=0 || true
 
       - name: Prepare web content (copy to www/)
         run: |
