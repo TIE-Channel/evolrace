@@ -89,22 +89,28 @@ jobs:
             ["xxxhdpi"]=192
           )
 
-          # Генерируем ic_launcher.png (стандартная) и ic_launcher_round.png (круглая)
+          # Генерируем стандартные иконки (ic_launcher, ic_launcher_round)
           for density in "${!SIZES[@]}"; do
             size=${SIZES[$density]}
             convert icon-512.png -resize ${size}x${size} \
               android/app/src/main/res/mipmap-$density/ic_launcher.png
 
-            # Круглая иконка - Android клиппинг сделает сам, или вручную с маской
             convert icon-512.png -resize ${size}x${size} \
               android/app/src/main/res/mipmap-$density/ic_launcher_round.png
 
-            # Adaptive icon foreground (108dp = размер*2 примерно)
-            adaptive_size=$((size * 108 / 48))
-            convert icon-512.png -resize ${adaptive_size}x${adaptive_size} \
+            # Adaptive icon foreground - 108x108dp с safe zone 66x66dp
+            # Размещаем иконку 66/108 = ~61% от размера в центре, остальное прозрачное
+            adaptive_full=$((size * 108 / 48))   # полный размер adaptive (108dp)
+            adaptive_safe=$((size * 66 / 48))    # safe zone (66dp)
+
+            convert icon-512.png \
+              -resize ${adaptive_safe}x${adaptive_safe} \
+              -background none \
+              -gravity center \
+              -extent ${adaptive_full}x${adaptive_full} \
               android/app/src/main/res/mipmap-$density/ic_launcher_foreground.png
 
-            echo "Generated icons for $density (${size}x${size})"
+            echo "Generated icons for $density (${size}x${size}, adaptive ${adaptive_full}x${adaptive_full} with safe ${adaptive_safe}x${adaptive_safe})"
           done
 
           # Adaptive icon XML для Android 8+
@@ -176,25 +182,27 @@ jobs:
           echo "=== Updated styles.xml ==="
           cat "$STYLES_FILE"
 
-      - name: Configure MainActivity for immersive mode
+      - name: Configure MainActivity for immersive mode and audio autoplay
         run: |
           # Находим MainActivity.java
           MAIN_ACTIVITY=$(find android/app/src/main/java -name "MainActivity.java" | head -1)
           echo "MainActivity at: $MAIN_ACTIVITY"
-          echo "=== Original ==="
-          cat "$MAIN_ACTIVITY"
 
           # Извлекаем package из существующего файла
           PACKAGE=$(grep "^package" "$MAIN_ACTIVITY" | head -1 | sed 's/package //;s/;//')
           echo "Package: $PACKAGE"
 
-          # Перезаписываем MainActivity с immersive mode
+          # Перезаписываем MainActivity:
+          # 1. Immersive mode (скрытие status и nav bar)
+          # 2. Keep screen on
+          # 3. setMediaPlaybackRequiresUserGesture(false) - audio играет без тапа
           cat > "$MAIN_ACTIVITY" << JAVAEOF
           package $PACKAGE;
 
           import android.os.Bundle;
           import android.view.View;
           import android.view.WindowManager;
+          import android.webkit.WebView;
           import com.getcapacitor.BridgeActivity;
 
           public class MainActivity extends BridgeActivity {
@@ -202,6 +210,7 @@ jobs:
               public void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
                   hideSystemUI();
+                  enableAudioAutoplay();
               }
 
               @Override
@@ -223,8 +232,21 @@ jobs:
                       | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                       | View.SYSTEM_UI_FLAG_FULLSCREEN
                   );
-                  // Также добавляем флаг чтобы экран не выключался во время игры
+                  // Экран не выключается во время игры
                   getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+              }
+
+              private void enableAudioAutoplay() {
+                  // Разрешаем audio/video autoplay без user gesture
+                  // Это нужно чтобы Web Audio API заработал сразу при загрузке игры
+                  try {
+                      WebView webView = this.bridge.getWebView();
+                      if (webView != null) {
+                          webView.getSettings().setMediaPlaybackRequiresUserGesture(false);
+                      }
+                  } catch (Exception e) {
+                      e.printStackTrace();
+                  }
               }
           }
           JAVAEOF
