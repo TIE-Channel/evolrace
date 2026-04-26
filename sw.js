@@ -1,71 +1,51 @@
-/* Service Worker для Evolrace PWA */
-const CACHE_NAME = 'evolrace-cache-v74';
-const PRECACHE_URLS = [
-  './',
-  './index.html',
-  './manifest.webmanifest',
-  './icon-192.png',
-  './icon-512.png',
-  './icon-maskable.png',
-  './screenshot-1280x720.png'
-];
+# Как использовать pwabuilder.com с этим пакетом
 
-// При установке - precache всех ресурсов
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => {
-        console.log('[SW] Precaching', PRECACHE_URLS.length, 'files');
-        return cache.addAll(PRECACHE_URLS);
-      })
-      .then(() => self.skipWaiting())
-      .catch((err) => console.error('[SW] Precache failed:', err))
-  );
-});
+## ВАЖНО: PWA Builder не принимает ZIP файлы!
 
-// При активации - удаляем старые кеши
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys()
-      .then((cacheNames) => Promise.all(
-        cacheNames
-          .filter((name) => name !== CACHE_NAME)
-          .map((name) => caches.delete(name))
-      ))
-      .then(() => self.clients.claim())
-  );
-});
+PWA Builder требует **публичный HTTPS URL** где развёрнута ваша PWA. Если вы пытаетесь
+загрузить ZIP - сервис никогда не закончит загрузку.
 
-// Стратегия Cache First - сначала кеш, потом сеть
-self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET') return;
-  const url = new URL(event.request.url);
-  if (url.origin !== self.location.origin) return;
+## Правильный workflow:
 
-  event.respondWith(
-    caches.match(event.request)
-      .then((cachedResponse) => {
-        if (cachedResponse) {
-          return cachedResponse;
-        }
-        return fetch(event.request)
-          .then((networkResponse) => {
-            if (networkResponse && networkResponse.status === 200) {
-              const responseClone = networkResponse.clone();
-              caches.open(CACHE_NAME).then((cache) => {
-                cache.put(event.request, responseClone);
-              });
-            }
-            return networkResponse;
-          })
-          .catch(() => caches.match('./index.html'));
-      })
-  );
-});
+### Вариант 1: GitHub Pages (бесплатно, легко)
 
-// Сообщения от клиента (например для проверки версии)
-self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') {
-    self.skipWaiting();
-  }
-});
+1. Создайте новый репозиторий на github.com
+2. Загрузите все файлы из этого ZIP в корень репозитория:
+   - index.html
+   - manifest.json
+   - sw.js
+   - icon-192.png, icon-512.png, icon-maskable.png
+   - screenshot-1280x720.png
+3. В Settings -> Pages -> Source: "Deploy from a branch", выберите main
+4. Через 1-2 минуты получите URL вида `https://username.github.io/repo-name/`
+5. Идите на pwabuilder.com и введите этот URL
+
+### Вариант 2: Netlify Drop (мгновенно, без аккаунта)
+
+1. Откройте https://app.netlify.com/drop
+2. Перетащите всю распакованную папку из ZIP на эту страницу
+3. Получите URL вида `https://random-name.netlify.app`
+4. Введите этот URL на pwabuilder.com
+
+### Вариант 3: Vercel
+
+1. https://vercel.com (бесплатный аккаунт)
+2. New Project -> Import folder
+3. Получите URL и используйте его на pwabuilder.com
+
+## Что делать дальше после ввода URL на PWABuilder
+
+После ввода правильного HTTPS URL pwabuilder.com:
+1. Покажет проверку Manifest, Service Worker, Security
+2. Все три должны быть зелёными (валидаторы прошли)
+3. Нажмите "Package for stores"
+4. Выберите Android (или iOS, Windows)
+5. Скачается готовый APK / iOS пакет
+
+## Если pwabuilder.com всё равно зависает
+
+1. Проверьте что URL открывается в браузере
+2. Проверьте что URL начинается с `https://` (не `http://`)
+3. Проверьте что нет 404 ошибок на ресурсы (manifest.json, sw.js, иконки)
+4. Откройте DevTools -> Application -> Manifest, должен показаться ваш manifest без ошибок
+5. DevTools -> Application -> Service Workers, должен быть зарегистрирован
