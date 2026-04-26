@@ -46,7 +46,13 @@ jobs:
 
       - name: Prepare web content (copy to www/)
         run: |
-          node build-www.js
+          mkdir -p www
+          cp index.html www/
+          cp sw.js www/ 2>/dev/null || true
+          cp manifest.webmanifest www/ 2>/dev/null || true
+          cp icon-192.png www/ 2>/dev/null || true
+          cp icon-512.png www/ 2>/dev/null || true
+          cp icon-maskable.png www/ 2>/dev/null || true
           echo "=== www/ contents ==="
           ls -la www/
 
