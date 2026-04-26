@@ -8,7 +8,7 @@ on:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
 
     steps:
       - name: Checkout repository
@@ -30,6 +30,25 @@ jobs:
         with:
           packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
 
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.android/build-cache
+          key: gradle-${{ runner.os }}-twa-v1
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-bubblewrap-v1
+          restore-keys: |
+            npm-bubblewrap-
+
       - name: Install @bubblewrap/core
         run: |
           npm init -y
@@ -37,7 +56,6 @@ jobs:
 
       - name: Generate TWA Android Project
         run: |
-          # Создаём скрипт в рабочей директории (там где node_modules)
           cat > _build-twa.js << 'JSEOF'
           const path = require('path');
           const fs = require('fs');
@@ -75,21 +93,9 @@ jobs:
 
             console.log('=== TWA Build ===');
             console.log('Repo:', repoRoot);
-            console.log('Manifest exists:', fs.existsSync(manifestPath));
-
-            if (!fs.existsSync(manifestPath)) {
-              console.error('ERROR: twa-manifest.json не найден');
-              process.exit(1);
-            }
-
             const data = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
             const localIcon = path.join(repoRoot, 'icon-512.png');
             const localMaskable = path.join(repoRoot, 'icon-maskable.png');
-
-            if (!fs.existsSync(localIcon) || !fs.existsSync(localMaskable)) {
-              console.error('ERROR: иконки отсутствуют');
-              process.exit(1);
-            }
             console.log('icon-512.png:', fs.statSync(localIcon).size, 'bytes');
             console.log('icon-maskable.png:', fs.statSync(localMaskable).size, 'bytes');
 
@@ -102,8 +108,6 @@ jobs:
             console.log('@bubblewrap/core:', require('@bubblewrap/core/package.json').version);
 
             const twaManifest = new TwaManifest(data);
-            console.log('TwaManifest OK');
-
             if (!fs.existsSync(projectDir)) fs.mkdirSync(projectDir, { recursive: true });
 
             console.log('Generating Android project...');
@@ -113,19 +117,14 @@ jobs:
             } finally {
               server.close();
             }
-
             fs.copyFileSync(manifestPath, path.join(projectDir, 'twa-manifest.json'));
-            console.log('Files in project:');
-            fs.readdirSync(projectDir).forEach(f => console.log('  ' + f));
           })().catch(err => {
             console.error('FATAL:', err);
             console.error(err.stack);
             process.exit(1);
           });
           JSEOF
-          # Запускаем скрипт в рабочей директории где есть node_modules
           node _build-twa.js
-          # Удаляем после использования
           rm -f _build-twa.js
 
       - name: Generate signing keystore
@@ -148,8 +147,28 @@ jobs:
             -storepass android \
             -keypass android | grep -E "SHA256:" | head -1
 
-      - name: Build APK
+      - name: Configure Gradle for CI
         working-directory: android-project
+        run: |
+          # Оптимизированные настройки Gradle для CI
+          cat > gradle.properties << 'GRADLEEOF'
+          org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -Dfile.encoding=UTF-8
+          org.gradle.parallel=true
+          org.gradle.caching=true
+          org.gradle.daemon=false
+          org.gradle.configureondemand=false
+          android.useAndroidX=true
+          android.enableJetifier=false
+          kotlin.incremental=false
+          GRADLEEOF
+          echo "=== gradle.properties ==="
+          cat gradle.properties
+          echo "=== Gradle wrapper version ==="
+          cat gradle/wrapper/gradle-wrapper.properties || true
+
+      - name: Build APK with Gradle
+        working-directory: android-project
+        timeout-minutes: 60
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease bundleRelease \
@@ -157,16 +176,20 @@ jobs:
             -Pandroid.injected.signing.store.password=android \
             -Pandroid.injected.signing.key.alias=evolrace \
             -Pandroid.injected.signing.key.password=android \
-            --stacktrace --no-daemon
+            --build-cache \
+            --max-workers=2 \
+            --no-daemon
 
       - name: Find generated artifacts
+        if: always()
         run: |
           echo "=== APKs ==="
-          find android-project -name "*.apk" -type f
+          find android-project -name "*.apk" -type f 2>/dev/null
           echo "=== AABs ==="
-          find android-project -name "*.aab" -type f
+          find android-project -name "*.aab" -type f 2>/dev/null
 
       - name: Upload APK
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: evolrace-apk
@@ -175,6 +198,7 @@ jobs:
           retention-days: 30
 
       - name: Upload AAB
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: evolrace-aab
