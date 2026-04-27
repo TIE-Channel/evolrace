@@ -9882,15 +9882,15 @@ document.addEventListener('click', lockOrientation, { once: true });
       }
 
       // === Управление декоративной рамкой "Ads" ===
-      // Рамка с надписью "Ads" видна ВСЕГДА когда реклама не куплена,
-      // независимо от того показан banner или нет. Banner накладывается поверх.
-      // Скрывается только при покупке Remove Ads.
+      // Рамка с надписью "Ads" видна на READY/OVER (где есть banner),
+      // СКРЫТА на RUN (там banner отключён для производительности).
+      // Также скрыта если реклама куплена.
       const frame = document.getElementById('ad-banner-frame');
       if (frame) {
-        if (adsRemoved) {
+        if (adsRemoved || currentState === STATE.RUN || currentState === STATE.INTRO || currentState === STATE.OUTRO) {
           frame.style.display = 'none';
         } else {
-          // flex чтобы текст "Ads" центрировался
+          // READY/OVER - flex чтобы текст "Ads" центрировался
           frame.style.display = 'flex';
         }
       }
@@ -9909,6 +9909,10 @@ document.addEventListener('click', lockOrientation, { once: true });
         const tieCorner = document.getElementById('tie-corner-link');
         if (tieCorner) tieCorner.style.display = 'flex';
       } else if (currentState === STATE.RUN) {
+        // Banner СКРЫТ во время активного геймплея - устраняет микро-лаги от AdMob refresh
+        // (AdMob каждые 60 сек делает HTTP запрос + рендер на UI thread = подтормаживание)
+        // Banner показывается на READY/OVER экранах где лаг не критичен
+        if (bannerShown) hideBannerAd();
         // Кнопка "Remove Ads" всегда видна если реклама не куплена
         if (!adsRemoved) {
           removeAdsBtn.style.display = 'block';
@@ -9945,23 +9949,6 @@ document.addEventListener('click', lockOrientation, { once: true });
       const tieCornerOutro = document.getElementById('tie-corner-link');
       if (tieCornerOutro) {
         tieCornerOutro.style.display = (t > 0.85) ? 'flex' : 'none';
-      }
-    }
-
-    // === BANNER CYCLE во время RUN ===
-    // ВНЕ if (currentState !== lastGameState) - выполняется на КАЖДОМ poll tick (200мс)
-    // Cycle: 22 сек скрыт (только рамка с "Ads") -> 8 сек banner поверх -> повтор
-    if (currentState === STATE.RUN && !adsRemoved && isCapacitor && runStartTime > 0) {
-      const runDurationMs = Date.now() - runStartTime;
-      const CYCLE_MS = 30000;       // полный цикл 30 сек
-      const SHOW_FOR_MS = 8000;     // banner виден последние 8 сек цикла
-      const HIDDEN_MS = CYCLE_MS - SHOW_FOR_MS; // 22 сек скрыт
-      const phase = runDurationMs % CYCLE_MS;
-      const shouldShow = phase >= HIDDEN_MS;
-      if (shouldShow && !bannerShown) {
-        showBannerAd();
-      } else if (!shouldShow && bannerShown) {
-        hideBannerAd();
       }
     }
   }
