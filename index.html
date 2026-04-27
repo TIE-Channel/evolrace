@@ -235,7 +235,7 @@ document.addEventListener('click', lockOrientation, { once: true });
   };
 
   let night = false;
-  let dayPhase = 0.15; // 0..1 - фаза цикла дня/ночи
+  let dayPhase = 0; // 0..1 - фаза цикла дня/ночи. 0 = солнце под горизонтом, плавно восходит
   let sunY = 0, moonY = 0; // вертикальные позиции светил
 
   // Интерполяция между цветами
@@ -1010,7 +1010,10 @@ document.addEventListener('click', lockOrientation, { once: true });
   // Птеродактиль - splash cymbal (короткий высокий звон, отличается от crash)
   function playBirdCall(t) {
     if (!audioCtx) return;
-    // Короткий шумовой буфер
+    // Звук "глухой второй тарелки" (как ride cymbal или choked splash)
+    // Более тёмный/глухой чем crash - средние частоты вместо ярких высоких
+
+    // Шумовой буфер
     const noiseSize = audioCtx.sampleRate * 0.4;
     const noiseBuf = audioCtx.createBuffer(1, noiseSize, audioCtx.sampleRate);
     const noiseData = noiseBuf.getChannelData(0);
@@ -1018,33 +1021,39 @@ document.addEventListener('click', lockOrientation, { once: true });
     const noise = audioCtx.createBufferSource();
     noise.buffer = noiseBuf;
 
-    // Bandpass на средне-высоких частотах с резонансом - как tight splash
+    // Bandpass на средних частотах (4500 Hz вместо 7500) - более тёмный тон
     const bp = audioCtx.createBiquadFilter();
     bp.type = 'bandpass';
-    bp.frequency.value = 7500;
-    bp.Q.value = 3;
+    bp.frequency.value = 4500;
+    bp.Q.value = 2;
 
-    // Короткая огибающая - быстрая атака, более быстрый распад чем у crash
+    // Дополнительный lowpass для "глухости" - срезает яркие высокие
+    const lp = audioCtx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 6000;
+    lp.Q.value = 0.7;
+
+    // Огибающая - короче чем у crash (ride cymbal играет коротко)
     const g = audioCtx.createGain();
     g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.22, t + 0.003);
-    g.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+    g.gain.linearRampToValueAtTime(0.20, t + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.30);
 
-    noise.connect(bp).connect(g).connect(masterOut);
+    noise.connect(bp).connect(lp).connect(g).connect(masterOut);
     noise.start(t);
 
-    // Высокий "звонкий" sine для тонального акцента (отличает от обычной crash)
+    // Тональный акцент - ниже sine (1800 → 1200 Hz, вместо 3200 → 2400)
     const o = audioCtx.createOscillator();
     o.type = 'sine';
-    o.frequency.setValueAtTime(3200, t);
-    o.frequency.exponentialRampToValueAtTime(2400, t + 0.2);
+    o.frequency.setValueAtTime(1800, t);
+    o.frequency.exponentialRampToValueAtTime(1200, t + 0.2);
     const og = audioCtx.createGain();
     og.gain.setValueAtTime(0, t);
-    og.gain.linearRampToValueAtTime(0.08, t + 0.005);
-    og.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+    og.gain.linearRampToValueAtTime(0.06, t + 0.005);
+    og.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
     o.connect(og).connect(masterOut);
     o.start(t);
-    o.stop(t + 0.35);
+    o.stop(t + 0.3);
   }
 
   function playClap(t) {
@@ -2327,7 +2336,7 @@ document.addEventListener('click', lockOrientation, { once: true });
     shootCooldown = 0;
     odessaOffset = 0;
     night = false;
-    dayPhase = 0.15;
+    dayPhase = 0;
     beatPulse = 0;
     rainbowHitCounter = 0;
     activeBoss = null;
@@ -2865,7 +2874,16 @@ document.addEventListener('click', lockOrientation, { once: true });
     tickBeatStars();
     tickBeatBones();
     // Плавный цикл дня/ночи - полный круг за 2800 очков
-    dayPhase = ((score / 1400) + 0.15) % 1;
+    // На старте dayPhase=0 (под горизонтом), target=0.03 (восход)
+    // dayPhase плавно подтягивается - даёт АНИМАЦИЮ ВОСХОДА на старте уровня
+    // и плавный переход после босса (вместо резкого скачка от +200 очков)
+    const targetDayPhase = ((score / 1400) + 0.03) % 1;
+    // Минимальная разница с учётом цикла (например 0.95 → 0.05 = +0.1, не -0.9)
+    let diff = targetDayPhase - dayPhase;
+    if (diff > 0.5) diff -= 1;
+    else if (diff < -0.5) diff += 1;
+    // Плавно подтягиваем (5% в кадр для быстрого, но не мгновенного догона)
+    dayPhase = (dayPhase + diff * 0.05 + 1) % 1;
     night = nightFactor() > 0.5;
 
     // Спавн босса на заходе солнца (0.55) или луны (~0.05) - не спавним в финальном уровне
