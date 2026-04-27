@@ -9882,15 +9882,15 @@ document.addEventListener('click', lockOrientation, { once: true });
       }
 
       // === Управление декоративной рамкой "Ads" ===
-      // Рамка с надписью "Ads" видна на READY/OVER (где есть banner),
-      // СКРЫТА на RUN (там banner отключён для производительности).
+      // Рамка с надписью "Ads" видна на READY/INTRO/OVER (где banner тоже виден),
+      // СКРЫТА на RUN (там banner отключён для производительности) и на OUTRO.
       // Также скрыта если реклама куплена.
       const frame = document.getElementById('ad-banner-frame');
       if (frame) {
-        if (adsRemoved || currentState === STATE.RUN || currentState === STATE.INTRO || currentState === STATE.OUTRO) {
+        if (adsRemoved || currentState === STATE.RUN || currentState === STATE.OUTRO) {
           frame.style.display = 'none';
         } else {
-          // READY/OVER - flex чтобы текст "Ads" центрировался
+          // READY/INTRO/OVER - flex чтобы текст "Ads" центрировался
           frame.style.display = 'flex';
         }
       }
