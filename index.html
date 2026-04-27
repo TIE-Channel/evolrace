@@ -9368,6 +9368,8 @@ document.addEventListener('click', lockOrientation, { once: true });
 </div>
 
 <!-- Декоративная рамка вокруг banner -->
+<!-- Видна постоянно когда реклама не куплена. Внутри текст "Ads" - виден когда banner скрыт. -->
+<!-- Когда banner показывается - он накладывается поверх рамки и перекрывает текст. -->
 <div id="ad-banner-frame" style="display:none;position:fixed;bottom:5px;left:50%;transform:translateX(-50%);
   width:322px;height:52px;
   border:2px solid #1060a0;
@@ -9375,7 +9377,10 @@ document.addEventListener('click', lockOrientation, { once: true });
   border-radius:3px;
   box-shadow:0 2px 6px rgba(0,0,0,0.5);
   z-index:999;pointer-events:none;
-  box-sizing:content-box;"></div>
+  box-sizing:content-box;
+  align-items:center;justify-content:center;
+  font-family:sans-serif;color:#1060a0;font-size:20px;font-weight:bold;
+  letter-spacing:2px;">Ads</div>
 
 <!-- Уведомление "Спасибо за покупку" -->
 <div id="purchase-thanks" style="display:none;position:fixed;top:50px;left:50%;transform:translateX(-50%);
@@ -9591,8 +9596,8 @@ document.addEventListener('click', lockOrientation, { once: true });
       bannerShown = true;
       recordAdSuccess();
       console.log('[Ads] Banner shown');
-      const frame = document.getElementById('ad-banner-frame');
-      if (frame) frame.style.display = 'block';
+      // Рамка с надписью "Ads" уже видна (управляется отдельно в checkGameState)
+      // Banner накладывается поверх рамки и перекрывает текст
     } catch (e) {
       console.warn('[Ads] showBanner error:', e.message || e);
       bannerShown = false;
@@ -9602,9 +9607,7 @@ document.addEventListener('click', lockOrientation, { once: true });
 
   async function hideBannerAd() {
     if (!isCapacitor) return;
-    // Скрываем декоративную рамку
-    const frame = document.getElementById('ad-banner-frame');
-    if (frame) frame.style.display = 'none';
+    // Рамка остаётся видимой (управляется в checkGameState через adsRemoved)
     try {
       const { AdMob } = window.Capacitor.Plugins;
       await AdMob.removeBanner();
@@ -9877,6 +9880,20 @@ document.addEventListener('click', lockOrientation, { once: true });
         }
       }
 
+      // === Управление декоративной рамкой "Ads" ===
+      // Рамка с надписью "Ads" видна ВСЕГДА когда реклама не куплена,
+      // независимо от того показан banner или нет. Banner накладывается поверх.
+      // Скрывается только при покупке Remove Ads.
+      const frame = document.getElementById('ad-banner-frame');
+      if (frame) {
+        if (adsRemoved) {
+          frame.style.display = 'none';
+        } else {
+          // flex чтобы текст "Ads" центрировался
+          frame.style.display = 'flex';
+        }
+      }
+
       // READY экран
       if (currentState === STATE.READY) {
         if (!adsRemoved && isCapacitor) {
@@ -9885,36 +9902,13 @@ document.addEventListener('click', lockOrientation, { once: true });
         if (!adsRemoved) {
           removeAdsBtn.style.display = 'block';
         } else {
-          // Дополнительная защита - если ads removed, прячем рамку и кнопку
-          const frame = document.getElementById('ad-banner-frame');
-          if (frame) frame.style.display = 'none';
           removeAdsBtn.style.display = 'none';
         }
         // TIE логотип в углу - на READY экране
         const tieCorner = document.getElementById('tie-corner-link');
         if (tieCorner) tieCorner.style.display = 'flex';
       } else if (currentState === STATE.RUN) {
-        // Во время игры - показываем banner ПЕРИОДИЧЕСКИ (8 сек каждые 30 сек)
-        // Это даёт пользователю передышку и больше impressions для рекламы.
-        // Cycle: 22 сек скрыт -> 8 сек показан -> 22 сек скрыт -> ...
-        if (!adsRemoved && isCapacitor && runStartTime > 0) {
-          const runDurationMs = Date.now() - runStartTime;
-          const CYCLE_MS = 30000;       // полный цикл 30 сек
-          const SHOW_FOR_MS = 8000;     // показывается последние 8 сек цикла
-          const HIDDEN_MS = CYCLE_MS - SHOW_FOR_MS; // 22 сек скрыт
-          const phase = runDurationMs % CYCLE_MS;
-          const shouldShow = phase >= HIDDEN_MS;
-          if (shouldShow && !bannerShown) {
-            showBannerAd();
-          } else if (!shouldShow && bannerShown) {
-            hideBannerAd();
-          }
-        } else {
-          // Если adsRemoved или не Capacitor - убеждаемся что banner точно скрыт
-          if (bannerShown) hideBannerAd();
-        }
         // Кнопка "Remove Ads" всегда видна если реклама не куплена
-        // (даёт игроку возможность купить in-app в любой момент во время игры)
         if (!adsRemoved) {
           removeAdsBtn.style.display = 'block';
         } else {
@@ -9928,9 +9922,6 @@ document.addEventListener('click', lockOrientation, { once: true });
           if (isCapacitor) showBannerAd();
           removeAdsBtn.style.display = 'block';
         } else {
-          // ads removed - всё скрыто
-          const frame = document.getElementById('ad-banner-frame');
-          if (frame) frame.style.display = 'none';
           removeAdsBtn.style.display = 'none';
         }
         // TIE логотип в углу - на OVER экране
@@ -9953,6 +9944,23 @@ document.addEventListener('click', lockOrientation, { once: true });
       const tieCornerOutro = document.getElementById('tie-corner-link');
       if (tieCornerOutro) {
         tieCornerOutro.style.display = (t > 0.85) ? 'flex' : 'none';
+      }
+    }
+
+    // === BANNER CYCLE во время RUN ===
+    // ВНЕ if (currentState !== lastGameState) - выполняется на КАЖДОМ poll tick (200мс)
+    // Cycle: 22 сек скрыт (только рамка с "Ads") -> 8 сек banner поверх -> повтор
+    if (currentState === STATE.RUN && !adsRemoved && isCapacitor && runStartTime > 0) {
+      const runDurationMs = Date.now() - runStartTime;
+      const CYCLE_MS = 30000;       // полный цикл 30 сек
+      const SHOW_FOR_MS = 8000;     // banner виден последние 8 сек цикла
+      const HIDDEN_MS = CYCLE_MS - SHOW_FOR_MS; // 22 сек скрыт
+      const phase = runDurationMs % CYCLE_MS;
+      const shouldShow = phase >= HIDDEN_MS;
+      if (shouldShow && !bannerShown) {
+        showBannerAd();
+      } else if (!shouldShow && bannerShown) {
+        hideBannerAd();
       }
     }
   }
