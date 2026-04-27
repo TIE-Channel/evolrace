@@ -235,7 +235,7 @@ document.addEventListener('click', lockOrientation, { once: true });
   };
 
   let night = false;
-  let dayPhase = 0; // 0..1 - фаза цикла дня/ночи. 0 = солнце под горизонтом, плавно восходит
+  let dayPhase = 0.15; // 0..1 - фаза цикла дня/ночи. На старте день.
   let sunY = 0, moonY = 0; // вертикальные позиции светил
 
   // Интерполяция между цветами
@@ -878,15 +878,22 @@ document.addEventListener('click', lockOrientation, { once: true });
   }
 
   // Обработка сворачивания/разворачивания таба
+  // Полная пауза - аудио + RAF цикл (спавны единорогов/звёзд/препятствий и анимация)
+  let gamePaused = false;
   document.addEventListener('visibilitychange', () => {
-    if (!audioCtx) return;
     if (document.hidden) {
-      audioCtx.suspend().catch(() => {});
+      gamePaused = true;
+      // Останавливаем audio (тоже остановит запланированные звуки)
+      if (audioCtx) audioCtx.suspend().catch(() => {});
     } else {
-      audioCtx.resume().catch(() => {});
-      if (state === STATE.RUN) {
-        musicStartTime = audioCtx.currentTime + 0.1;
-        lastSteppedAt = -1;
+      gamePaused = false;
+      // Возобновляем audio
+      if (audioCtx) {
+        audioCtx.resume().catch(() => {});
+        if (state === STATE.RUN) {
+          musicStartTime = audioCtx.currentTime + 0.1;
+          lastSteppedAt = -1;
+        }
       }
     }
   });
@@ -2125,8 +2132,9 @@ document.addEventListener('click', lockOrientation, { once: true });
     if (absStep % 1024 === 512) {
       spawnHeart();
     }
-    // Каждые 8 тактов - группа поддержки
-    if (absStep % 128 === 32) spawnCrowd();
+    // Каждые 8 тактов - группа поддержки. Спавн на step 8 - за 8 шагов до
+    // первого кактуса (16) в цикле, чтобы группа поддержки была ПЕРЕД препятствием
+    if (absStep % 128 === 8) spawnCrowd();
   }
 
   function doJump() {
@@ -2336,7 +2344,7 @@ document.addEventListener('click', lockOrientation, { once: true });
     shootCooldown = 0;
     odessaOffset = 0;
     night = false;
-    dayPhase = 0;
+    dayPhase = 0.15;
     beatPulse = 0;
     rainbowHitCounter = 0;
     activeBoss = null;
@@ -2874,10 +2882,9 @@ document.addEventListener('click', lockOrientation, { once: true });
     tickBeatStars();
     tickBeatBones();
     // Плавный цикл дня/ночи - полный круг за 2800 очков
-    // На старте dayPhase=0 (под горизонтом), target=0.03 (восход)
-    // dayPhase плавно подтягивается - даёт АНИМАЦИЮ ВОСХОДА на старте уровня
-    // и плавный переход после босса (вместо резкого скачка от +200 очков)
-    const targetDayPhase = ((score / 1400) + 0.03) % 1;
+    // Smooth механизм - dayPhase плавно подтягивается к target,
+    // чтобы при +200 бонусе за босса солнце не "прыгало" а плавно переходило
+    const targetDayPhase = ((score / 1400) + 0.15) % 1;
     // Минимальная разница с учётом цикла (например 0.95 → 0.05 = +0.1, не -0.9)
     let diff = targetDayPhase - dayPhase;
     if (diff > 0.5) diff -= 1;
@@ -9205,6 +9212,13 @@ document.addEventListener('click', lockOrientation, { once: true });
       return;
     }
 
+    // Если игра свёрнута (приложение в фоне) - блокируем update и render
+    // чтобы не спавнились единороги/звёзды/препятствия и не двигалась анимация
+    if (gamePaused) {
+      requestAnimationFrame(loop);
+      return;
+    }
+
     // Ограничиваем частоту кадров до 60fps
     const elapsed = timestamp - lastFrameTimestamp;
     if (elapsed < TARGET_FRAME_TIME - 1) {
@@ -9255,6 +9269,76 @@ document.addEventListener('click', lockOrientation, { once: true });
   // В обычном веб-браузере audio будет в suspended state до первого тапа
   initAudio();
 
+  // === CAPACITOR APP LISTENER ===
+  // На Android при сворачивании по Home button visibilitychange не всегда срабатывает.
+  // Capacitor App plugin даёт более надёжный сигнал через appStateChange.
+  if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
+    try {
+      window.Capacitor.Plugins.App.addListener('appStateChange', (appState) => {
+        if (!appState.isActive) {
+          // Приложение свёрнуто
+          gamePaused = true;
+          if (audioCtx) audioCtx.suspend().catch(() => {});
+        } else {
+          // Приложение в foreground
+          gamePaused = false;
+          if (audioCtx) {
+            audioCtx.resume().catch(() => {});
+            if (state === STATE.RUN) {
+              musicStartTime = audioCtx.currentTime + 0.1;
+              lastSteppedAt = -1;
+            }
+          }
+        }
+      });
+    } catch (e) {
+      console.warn('[App] addListener error:', e);
+    }
+  }
+
+  // === PREWARM JIT ===
+  // При первом запуске игры на мобильном WebView компилирует JIT все hot paths
+  // (canvas drawings, audio scheduling) только при первом исполнении функций.
+  // Это вызывает тормоза в начале игры. Прогреваем здесь во время splash чтобы
+  // к моменту старта игры весь код уже был JIT-скомпилирован.
+  function prewarmJIT() {
+    try {
+      // 1. Создаём кеш спрайтов с filter (тяжёлая операция при первом раз)
+      // Это компилирует drawLizard/drawCyborg/drawHead/drawTail/etc
+      if (!_cachedLizardSprite) _cachedLizardSprite = createFilteredSprite(drawLizard, 60, 60, 15, 10);
+      if (!_cachedCyborgSprite) _cachedCyborgSprite = createFilteredSprite(drawCyborg, 60, 60, 10, 8);
+
+      // 2. Прогреваем audio scheduling - вызываем основные аудио функции с volume=0
+      // Это компилирует JIT для playKick/playSnare/playClap/playBass/playLead
+      // Все звуки происходят в будущем времени и с тишиной чтобы не было слышно
+      if (audioCtx && masterOut) {
+        const t0 = audioCtx.currentTime + 100; // далёкое будущее, не сыграется в реальности
+        // Вызываем все главные звуковые функции - JIT компилирует их код
+        try { playKick(t0); } catch(e) {}
+        try { playSnare(t0); } catch(e) {}
+        try { playClap(t0); } catch(e) {}
+        try { playHH(t0); } catch(e) {}
+        try { playCrash(t0); } catch(e) {}
+        try { playBirdCall(t0); } catch(e) {}
+        try { playBass(t0, 110); } catch(e) {}
+        try { playLead(t0, 220, 0.1); } catch(e) {}
+        try { playPowerChord(t0, 110); } catch(e) {}
+        // Через 500мс отменяем все запланированные звуки чтобы не сыграло
+        setTimeout(function() {
+          try {
+            // Создаём короткий silent gain ramp на masterOut чтобы убить хвосты
+            masterOut.gain.cancelScheduledValues(audioCtx.currentTime);
+            masterOut.gain.setValueAtTime(0.85, audioCtx.currentTime);
+          } catch(e) {}
+        }, 500);
+      }
+    } catch (e) {
+      console.warn('[Prewarm] error:', e);
+    }
+  }
+  // Запускаем prewarm асинхронно через setTimeout чтобы не блокировать инициализацию
+  setTimeout(prewarmJIT, 100);
+
   loop();
 })();
 </script>
@@ -9277,7 +9361,7 @@ document.addEventListener('click', lockOrientation, { once: true });
 
 <!-- Декоративная рамка вокруг banner -->
 <!-- div точно того же размера что banner (320x50) с симметричной 3px рамкой -->
-<div id="ad-banner-frame" style="display:none;position:fixed;bottom:8px;left:50%;transform:translateX(-50%);
+<div id="ad-banner-frame" style="display:none;position:fixed;bottom:2px;left:50%;transform:translateX(-50%);
   width:326px;height:56px;
   border:3px solid #1060a0;
   background:#1060a0;
