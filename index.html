@@ -9474,11 +9474,17 @@ document.addEventListener('click', lockOrientation, { once: true });
     }
     try {
       const { AdMob } = window.Capacitor.Plugins;
-      await AdMob.initialize({
-        requestTrackingAuthorization: true,
-        testingDevices: [],
-        initializeForTesting: IS_TEST_MODE
-      });
+      // Timeout 5 сек - в заблокированных регионах AdMob.initialize может зависать на 30+ сек
+      // и блокировать UI thread (нативная Java инициализация работает на main thread)
+      await withTimeout(
+        AdMob.initialize({
+          requestTrackingAuthorization: true,
+          testingDevices: [],
+          initializeForTesting: IS_TEST_MODE
+        }),
+        5000,
+        'AdMob.initialize'
+      );
       console.log('[Ads] AdMob initialized');
       isCapacitor = true;
 
@@ -9655,60 +9661,119 @@ document.addEventListener('click', lockOrientation, { once: true });
   }
 
   // === IN-APP PURCHASES через Capacitor (Google Play Billing) ===
+  // === IN-APP PURCHASES через cordova-plugin-purchase (CdvPurchase) ===
+  // Плагин exposes API через window.CdvPurchase после Capacitor sync.
+  // Устанавливается через: npm install cordova-plugin-purchase + npx cap sync android
   async function setupBilling() {
-    if (!window.Capacitor || !window.Capacitor.Plugins.GoogleBilling) {
-      console.log('[IAP] GoogleBilling plugin not available');
+    // window.CdvPurchase появляется после плагин init - может быть задержка
+    // Делаем несколько попыток (до 3 сек)
+    let attempts = 0;
+    while (!window.CdvPurchase && attempts < 30) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      attempts++;
+    }
+    if (!window.CdvPurchase) {
+      console.log('[IAP] CdvPurchase plugin not available (running in browser or plugin not installed)');
       return;
     }
     try {
-      const { GoogleBilling } = window.Capacitor.Plugins;
-      await GoogleBilling.initialize();
+      const { store, ProductType, Platform } = window.CdvPurchase;
 
-      // Проверяем существующие покупки (на случай переустановки)
-      const purchases = await GoogleBilling.queryPurchases({ productType: 'inapp' });
-      for (const purchase of (purchases.purchases || [])) {
-        if (purchase.productId === IAP_PRODUCT_ID) {
-          console.log('[IAP] Found existing purchase, restoring');
-          activateRemoveAds();
-        }
+      // Регистрируем продукт remove_ads (managed/non-consumable purchase)
+      store.register([{
+        id: IAP_PRODUCT_ID,
+        type: ProductType.NON_CONSUMABLE,
+        platform: Platform.GOOGLE_PLAY
+      }]);
+
+      // === Обработчики жизненного цикла покупки ===
+      // approved → verify (proxy серверная проверка, опционально)
+      // verified → finish (acknowledge для Google Play)
+      // finished → активируем remove ads
+      store.when()
+        .approved(transaction => {
+          console.log('[IAP] Transaction approved');
+          transaction.verify();
+        })
+        .verified(receipt => {
+          console.log('[IAP] Receipt verified');
+          receipt.finish();
+        })
+        .finished(transaction => {
+          console.log('[IAP] Transaction finished');
+          // Проверяем что куплен именно remove_ads
+          const ownsRemoveAds = transaction.products && transaction.products.some(p => p.id === IAP_PRODUCT_ID);
+          if (ownsRemoveAds) {
+            activateRemoveAds();
+            if (purchaseThanks) {
+              purchaseThanks.style.display = 'block';
+              setTimeout(() => purchaseThanks.style.display = 'none', 3000);
+            }
+          }
+        });
+
+      // Логирование ошибок покупок
+      store.error(err => {
+        console.warn('[IAP] Store error:', err.code, err.message);
+      });
+
+      // Инициализация - подключение к Google Play (timeout 5 сек)
+      // В России Google Play Billing service может быть медленным/недоступным
+      await withTimeout(
+        store.initialize([Platform.GOOGLE_PLAY]),
+        5000,
+        'store.initialize'
+      );
+      console.log('[IAP] Store initialized');
+
+      // Восстанавливаем покупки после переустановки (timeout 5 сек)
+      await withTimeout(
+        store.restorePurchases(),
+        5000,
+        'store.restorePurchases'
+      );
+
+      // Если уже владеет remove_ads - активируем
+      const product = store.get(IAP_PRODUCT_ID, Platform.GOOGLE_PLAY);
+      if (product && product.owned) {
+        console.log('[IAP] Already owns remove_ads - restoring');
+        activateRemoveAds();
       }
     } catch (e) {
-      console.warn('[IAP] Setup error:', e);
+      console.warn('[IAP] setupBilling error/timeout:', e.message || e);
     }
   }
 
   async function purchaseRemoveAds() {
     if (adsRemoved) return;
 
-    if (!window.Capacitor || !window.Capacitor.Plugins.GoogleBilling) {
+    if (!window.CdvPurchase) {
       alert('In-app purchases work only in the installed app from Google Play Store. ' +
             'Download Evolrace from Play Store to support the developer.');
       return;
     }
 
     try {
-      const { GoogleBilling } = window.Capacitor.Plugins;
-
-      // Запускаем покупку
-      const result = await GoogleBilling.purchase({
-        productId: IAP_PRODUCT_ID,
-        productType: 'inapp'
-      });
-
-      if (result.success || result.purchase) {
-        // Подтверждаем покупку (acknowledge для non-consumable)
-        if (result.purchase && result.purchase.purchaseToken) {
-          await GoogleBilling.acknowledgePurchase({
-            purchaseToken: result.purchase.purchaseToken
-          });
-        }
-        activateRemoveAds();
-        purchaseThanks.style.display = 'block';
-        setTimeout(() => purchaseThanks.style.display = 'none', 3000);
+      const { store, Platform } = window.CdvPurchase;
+      const product = store.get(IAP_PRODUCT_ID, Platform.GOOGLE_PLAY);
+      if (!product) {
+        console.warn('[IAP] Product not registered or not loaded');
+        alert('Product not available. Please try again in a moment.');
+        return;
       }
+      const offer = product.getOffer();
+      if (!offer) {
+        console.warn('[IAP] Product offer not available (region/account issue?)');
+        alert('Product offer not available. Please try again later.');
+        return;
+      }
+      console.log('[IAP] Initiating purchase for', IAP_PRODUCT_ID);
+      // Запускаем Google Play purchase dialog
+      // Дальше всё обрабатывается через store.when().approved/verified/finished
+      offer.order();
     } catch (e) {
       console.warn('[IAP] Purchase error:', e);
-      if (e.code !== 'USER_CANCELED') {
+      if (e.code !== 'USER_CANCELED' && (!e.message || !/cancel/i.test(e.message))) {
         alert('Purchase failed. Please try again later.');
       }
     }
@@ -9726,6 +9791,45 @@ document.addEventListener('click', lockOrientation, { once: true });
   }
 
   removeAdsBtn.addEventListener('click', purchaseRemoveAds);
+
+  // === DEBUG: long press (3 сек) на Remove Ads = тестовая покупка ===
+  // Для тестирования UI флоу без настроенного Google Play Billing
+  // (баннер скроется, оверлей оффлайн не появится, кнопка пропадёт)
+  // Двойное нажатие после активации - сброс (для повторного тестирования)
+  let longPressTimer = null;
+  function startLongPress(e) {
+    if (longPressTimer) clearTimeout(longPressTimer);
+    longPressTimer = setTimeout(() => {
+      if (adsRemoved) {
+        // Уже активировано - предлагаем сброс
+        if (confirm('[DEBUG] Reset removed-ads state for re-testing?')) {
+          adsRemoved = false;
+          localStorage.removeItem('evolrace_ads_removed');
+          removeAdsBtn.style.display = 'block';
+          alert('Ads-removed reset. Banner will show again.');
+          location.reload();
+        }
+      } else {
+        if (confirm('[DEBUG] Activate test "Remove Ads" purchase? (no real payment)')) {
+          activateRemoveAds();
+          purchaseThanks.style.display = 'block';
+          setTimeout(() => purchaseThanks.style.display = 'none', 3000);
+        }
+      }
+    }, 3000); // 3 секунды
+  }
+  function cancelLongPress() {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  }
+  removeAdsBtn.addEventListener('touchstart', startLongPress);
+  removeAdsBtn.addEventListener('touchend', cancelLongPress);
+  removeAdsBtn.addEventListener('touchmove', cancelLongPress);
+  removeAdsBtn.addEventListener('mousedown', startLongPress);
+  removeAdsBtn.addEventListener('mouseup', cancelLongPress);
+  removeAdsBtn.addEventListener('mouseleave', cancelLongPress);
 
   // Умная логика interstitial:
   // - Короткий забег (<15 сек) - НЕ показываем (быстрый рестарт без раздражения)
@@ -9850,8 +9954,13 @@ document.addEventListener('click', lockOrientation, { once: true });
       }
     }
 
-    // Setup AdMob если в Capacitor
-    initAdMob().then(() => setupBilling());
+    // Setup AdMob и Billing - ОТЛОЖЕННО на 3 сек после старта.
+    // Это критично для регионов где AdMob/Google Play Services работают медленно/нестабильно
+    // (Россия и т.д.) - нативные initialize могут блокировать UI thread на 30+ сек.
+    // За эти 3 сек игра успеет загрузиться, JIT прогреется, audio запустится.
+    setTimeout(() => {
+      initAdMob().then(() => setupBilling()).catch(e => console.warn('[Init] AdMob/Billing error:', e));
+    }, 3000);
 
     // === OFFLINE OVERLAY === - показываем когда нет интернета и реклама не куплена
     setupOfflineDetection();
@@ -9937,7 +10046,7 @@ document.addEventListener('click', lockOrientation, { once: true });
       }
       // navigator говорит online - проверяем через fetch если давно не проверяли
       const now = Date.now();
-      if (now - lastInternetCheckTime > 8000) { // не чаще раз в 8 сек
+      if (now - lastInternetCheckTime > 30000) { // не чаще раз в 30 сек (было 8 - слишком часто, нагружало в РФ)
         lastInternetCheckTime = now;
         fetchCheckInternet().then(hasInternet => {
           lastInternetCheck = hasInternet;
