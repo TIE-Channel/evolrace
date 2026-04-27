@@ -879,24 +879,37 @@ document.addEventListener('click', lockOrientation, { once: true });
 
   // Обработка сворачивания/разворачивания таба
   // Полная пауза - аудио + RAF цикл (спавны единорогов/звёзд/препятствий и анимация)
+  // Используем МНОЖЕСТВЕННЫЕ triggers потому что на разных Android WebView
+  // и в разных ситуациях срабатывают разные события (Home button, recents button,
+  // notification panel, screen lock и т.д.)
   let gamePaused = false;
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
-      gamePaused = true;
-      // Останавливаем audio (тоже остановит запланированные звуки)
-      if (audioCtx) audioCtx.suspend().catch(() => {});
-    } else {
-      gamePaused = false;
-      // Возобновляем audio
-      if (audioCtx) {
-        audioCtx.resume().catch(() => {});
-        if (state === STATE.RUN) {
-          musicStartTime = audioCtx.currentTime + 0.1;
-          lastSteppedAt = -1;
-        }
+  function pauseGame() {
+    if (gamePaused) return;
+    gamePaused = true;
+    if (audioCtx) audioCtx.suspend().catch(() => {});
+  }
+  function resumeGame() {
+    if (!gamePaused) return;
+    gamePaused = false;
+    if (audioCtx) {
+      audioCtx.resume().catch(() => {});
+      if (state === STATE.RUN) {
+        musicStartTime = audioCtx.currentTime + 0.1;
+        lastSteppedAt = -1;
       }
     }
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) pauseGame();
+    else resumeGame();
   });
+  // Window blur/focus - срабатывает на recents button и notification pull-down
+  window.addEventListener('blur', pauseGame);
+  window.addEventListener('focus', resumeGame);
+  // pagehide/pageshow - дополнительная защита на Android Chrome WebView
+  window.addEventListener('pagehide', pauseGame);
+  window.addEventListener('pageshow', resumeGame);
 
   function makeDistortion() {
     const ws = audioCtx.createWaveShaper();
@@ -9270,25 +9283,27 @@ document.addEventListener('click', lockOrientation, { once: true });
   initAudio();
 
   // === CAPACITOR APP LISTENER ===
-  // На Android при сворачивании по Home button visibilitychange не всегда срабатывает.
-  // Capacitor App plugin даёт более надёжный сигнал через appStateChange.
+  // На Android при сворачивании по Home/recents button visibilitychange не всегда срабатывает.
+  // Capacitor App plugin даёт более надёжный сигнал.
   if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
     try {
-      window.Capacitor.Plugins.App.addListener('appStateChange', (appState) => {
-        if (!appState.isActive) {
-          // Приложение свёрнуто
-          gamePaused = true;
-          if (audioCtx) audioCtx.suspend().catch(() => {});
-        } else {
-          // Приложение в foreground
-          gamePaused = false;
-          if (audioCtx) {
-            audioCtx.resume().catch(() => {});
-            if (state === STATE.RUN) {
-              musicStartTime = audioCtx.currentTime + 0.1;
-              lastSteppedAt = -1;
-            }
-          }
+      const App = window.Capacitor.Plugins.App;
+      // appStateChange - срабатывает при изменении isActive
+      App.addListener('appStateChange', (appState) => {
+        if (!appState.isActive) pauseGame();
+        else resumeGame();
+      });
+      // pause/resume события (более надёжные на старых Android)
+      App.addListener('pause', pauseGame);
+      App.addListener('resume', resumeGame);
+      // Back button - сворачиваем приложение (а не закрываем)
+      App.addListener('backButton', () => {
+        // minimizeApp существует в @capacitor/app - сворачивает приложение в фон
+        if (App.minimizeApp) {
+          App.minimizeApp().catch(() => {});
+        } else if (App.exitApp) {
+          // Fallback - если minimizeApp недоступен, выходим из приложения
+          App.exitApp().catch(() => {});
         }
       });
     } catch (e) {
@@ -9308,11 +9323,27 @@ document.addEventListener('click', lockOrientation, { once: true });
       if (!_cachedLizardSprite) _cachedLizardSprite = createFilteredSprite(drawLizard, 60, 60, 15, 10);
       if (!_cachedCyborgSprite) _cachedCyborgSprite = createFilteredSprite(drawCyborg, 60, 60, 10, 8);
 
-      // 2. Прогреваем audio scheduling - вызываем основные аудио функции с volume=0
-      // Это компилирует JIT для playKick/playSnare/playClap/playBass/playLead
-      // Все звуки происходят в будущем времени и с тишиной чтобы не было слышно
+      // 2. РЕАЛЬНЫЙ ПРОГРЕВ render() - 5 раз вызываем render для текущего состояния (READY)
+      // Это компилирует JIT для drawReady, drawSky, drawGround, drawSunMoon, drawCloud, drawIntroFish
+      // Пользователь не видит результат потому что splash overlay поверх canvas
+      for (let i = 0; i < 5; i++) {
+        try { render(); } catch (e) {}
+      }
+      // Очищаем canvas чтобы не оставалось артефактов
+      try {
+        const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) ? window.devicePixelRatio : 1;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      } catch (e) {}
+
+      // 3. Прогрев audio - вызываем функции с volume=0 (на короткое время)
       if (audioCtx && masterOut) {
-        const t0 = audioCtx.currentTime + 100; // далёкое будущее, не сыграется в реальности
+        // Временно глушим master чтобы прогрев был БЕЗ слышимого звука
+        const savedGain = masterOut.gain.value;
+        masterOut.gain.cancelScheduledValues(audioCtx.currentTime);
+        masterOut.gain.setValueAtTime(0, audioCtx.currentTime);
+
+        const t0 = audioCtx.currentTime + 0.01;
         // Вызываем все главные звуковые функции - JIT компилирует их код
         try { playKick(t0); } catch(e) {}
         try { playSnare(t0); } catch(e) {}
@@ -9323,21 +9354,22 @@ document.addEventListener('click', lockOrientation, { once: true });
         try { playBass(t0, 110); } catch(e) {}
         try { playLead(t0, 220, 0.1); } catch(e) {}
         try { playPowerChord(t0, 110); } catch(e) {}
-        // Через 500мс отменяем все запланированные звуки чтобы не сыграло
+
+        // Через 800мс возвращаем громкость
         setTimeout(function() {
           try {
-            // Создаём короткий silent gain ramp на masterOut чтобы убить хвосты
             masterOut.gain.cancelScheduledValues(audioCtx.currentTime);
-            masterOut.gain.setValueAtTime(0.85, audioCtx.currentTime);
+            masterOut.gain.setValueAtTime(savedGain, audioCtx.currentTime);
           } catch(e) {}
-        }, 500);
+        }, 800);
       }
     } catch (e) {
       console.warn('[Prewarm] error:', e);
     }
   }
   // Запускаем prewarm асинхронно через setTimeout чтобы не блокировать инициализацию
-  setTimeout(prewarmJIT, 100);
+  // Делаем это РАНЬШЕ чем splash скроется (5000ms), чтобы JIT успел прогреться
+  setTimeout(prewarmJIT, 200);
 
   loop();
 })();
@@ -9361,12 +9393,12 @@ document.addEventListener('click', lockOrientation, { once: true });
 
 <!-- Декоративная рамка вокруг banner -->
 <!-- div точно того же размера что banner (320x50) с симметричной 3px рамкой -->
-<div id="ad-banner-frame" style="display:none;position:fixed;bottom:2px;left:50%;transform:translateX(-50%);
-  width:326px;height:56px;
-  border:3px solid #1060a0;
-  background:#1060a0;
-  border-radius:4px;
-  box-shadow:0 4px 8px rgba(0,0,0,0.5);
+<div id="ad-banner-frame" style="display:none;position:fixed;bottom:6px;left:50%;transform:translateX(-50%);
+  width:320px;height:50px;
+  border:2px solid #1060a0;
+  background:transparent;
+  border-radius:3px;
+  box-shadow:0 2px 6px rgba(0,0,0,0.5);
   z-index:999;pointer-events:none;
   box-sizing:content-box;"></div>
 
@@ -9470,6 +9502,14 @@ document.addEventListener('click', lockOrientation, { once: true });
 
       // Прелоадим первый interstitial
       prepareInterstitial();
+
+      // === ФОРС-ПОКАЗ BANNER при первом запуске ===
+      // Если игра уже на READY экране (то есть AdMob инициализировался ПОСЛЕ
+      // того как state стал READY) - показываем баннер сразу. Иначе поверка
+      // currentState !== lastGameState не сработает на первом проходе цикла.
+      if (window._evolrace && window._evolrace.getState() === window._evolrace.STATE.READY && !adsRemoved) {
+        setTimeout(showBannerAd, 100);
+      }
       return true;
     } catch (e) {
       console.warn('[Ads] AdMob init error:', e);
