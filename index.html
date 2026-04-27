@@ -1143,6 +1143,9 @@ document.addEventListener('click', lockOrientation, { once: true });
 
   function audioTick() {
     if (!audioCtx) return;
+    // Если игра на паузе - не возобновляем AudioContext и не планируем ноты
+    // (без этой проверки suspend() из pauseGame() автоматически отменяется)
+    if (gamePaused) return;
     // Браузеры могут усыпить контекст - реанимируем
     if (audioCtx.state === 'suspended') audioCtx.resume();
     if (state !== STATE.RUN) return;
@@ -2223,7 +2226,7 @@ document.addEventListener('click', lockOrientation, { once: true });
   document.addEventListener('keydown', (e) => {
     if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyR', 'KeyF'].includes(e.code)) e.preventDefault();
     keys[e.code] = true;
-    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    if (audioCtx && audioCtx.state === 'suspended' && !gamePaused) audioCtx.resume();
     // Чит-коды: 'ittedNN' - переход на NN-й уровень (01-19)
     // Формат строго двузначный: itted01, itted02, ..., itted19
     if ((state === STATE.READY || state === STATE.OVER) && e.key && e.key.length === 1) {
@@ -2277,7 +2280,7 @@ document.addEventListener('click', lockOrientation, { once: true });
   });
 
   canvas.addEventListener('mousedown', () => {
-    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    if (audioCtx && audioCtx.state === 'suspended' && !gamePaused) audioCtx.resume();
     if (state === STATE.READY) { startGame(); return; }
     if (state === STATE.OVER) { resetGame(); startGame(); return; }
     if (state === STATE.OUTRO && outroTimer <= 0) {
@@ -2294,7 +2297,7 @@ document.addEventListener('click', lockOrientation, { once: true });
   // Touch handler для мгновенного отклика на мобильных (без 300ms задержки от mousedown emulation)
   canvas.addEventListener('touchstart', (e) => {
     e.preventDefault();
-    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    if (audioCtx && audioCtx.state === 'suspended' && !gamePaused) audioCtx.resume();
     if (state === STATE.READY) { startGame(); return; }
     if (state === STATE.OVER) { resetGame(); startGame(); return; }
     if (state === STATE.OUTRO && outroTimer <= 0) {
@@ -9396,7 +9399,7 @@ document.addEventListener('click', lockOrientation, { once: true });
 <div id="ad-banner-frame" style="display:none;position:fixed;bottom:6px;left:50%;transform:translateX(-50%);
   width:320px;height:50px;
   border:2px solid #1060a0;
-  background:transparent;
+  background:#1060a0;
   border-radius:3px;
   box-shadow:0 2px 6px rgba(0,0,0,0.5);
   z-index:999;pointer-events:none;
