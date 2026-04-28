@@ -37,7 +37,7 @@
 1. AdMob Console → **Apps** → **Add App**
 2. Platform: **Android**
 3. **App available in app store**: Yes (если уже опубликовано) или No (для теста)
-4. Если Yes - найдите ваше приложение по package ID `io.github.tiechannel.evolrace`
+4. Если Yes - найдите ваше приложение по package ID `com.tiegames.evolrace`
 5. Получите **AdMob App ID** вида `ca-app-pub-1234567890123456~9876543210`
 
 ### 2.3. Создание Ad Units
