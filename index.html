@@ -439,7 +439,7 @@ document.addEventListener('click', lockOrientation, { once: true });
       }
     },
     // Принудительно прогоняет N игровых кадров (для тестов когда RAF throttled в headless)
-    // Каждый кадр вызывает update() + render() напрямую
+    // Каждый кадр вызывает update() + render() напрямую - canvas обновляется
     tickFrames: function(numFrames) {
       try {
         let actualFrames = 0;
@@ -452,6 +452,10 @@ document.addEventListener('click', lockOrientation, { once: true });
             frameCount++;
           } else if (state === STATE.RUN) {
             update();
+          }
+          // Рендерим после update - чтобы canvas обновился (важно для видео записи)
+          if (typeof render === 'function') {
+            render();
           }
           actualFrames++;
         }

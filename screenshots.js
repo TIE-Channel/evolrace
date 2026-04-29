@@ -361,13 +361,38 @@ async function recordVideo(device) {
   const videoPath = path.join(videoDir, 'gameplay.mp4');
   await recorder.start(videoPath);
 
-  // Симулируем тапы для прыжков (рандомно каждые 1.5-3 сек)
+  // Принудительно тикаем игровые кадры пока recorder пишет
+  // (в headless RAF throttled до ~10fps или меньше - без этого видео будет статичным)
+  // Цель: 60 game ticks в секунду + 1 render() на каждый tick
+  // tick interval = 50ms (20 циклов/сек, по 3 game frame = 60 fps)
   const recordDuration = 30000;
+  const tickIntervalMs = 50;
+  const framesPerTick = 3;
   const startTime = Date.now();
+  let frameCounter = 0;
+  let lastTapAt = startTime;
+  let nextTapDelay = 1500 + Math.random() * 1500;
+
   while (Date.now() - startTime < recordDuration) {
-    await sleep(1500 + Math.random() * 1500);
-    await tapCanvas(page).catch(() => {});
+    // Тикаем 3 кадра игры + рендерим
+    await page.evaluate((nFrames) => {
+      if (window._evolrace && window._evolrace.tickFrames) {
+        window._evolrace.tickFrames(nFrames);
+      }
+    }, framesPerTick).catch(() => {});
+
+    // Случайный тап для прыжка
+    const now = Date.now();
+    if (now - lastTapAt >= nextTapDelay) {
+      await tapCanvas(page).catch(() => {});
+      lastTapAt = now;
+      nextTapDelay = 1500 + Math.random() * 1500;
+    }
+
+    await sleep(tickIntervalMs);
+    frameCounter++;
   }
+  console.log(`  Total ticks: ${frameCounter} (~${(frameCounter * framesPerTick / 30).toFixed(1)} sec game time)`);
 
   await recorder.stop();
   await browser.close();
