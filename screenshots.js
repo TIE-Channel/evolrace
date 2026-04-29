@@ -351,23 +351,23 @@ async function recordVideo(device) {
 
   console.log('  Recording 30 seconds of gameplay...');
   const recorder = new PuppeteerScreenRecorder(page, {
-    fps: 30,
+    fps: 60,  // 60 FPS видео - совпадает с частотой игровой логики
     videoFrame: { width: device.width, height: device.height },
     aspectRatio: `${device.width}:${device.height}`,
     videoCodec: 'libx264',
-    videoBitrate: 3000  // 3 Mbps - выше для лучшего качества
+    videoBitrate: 5000  // 5 Mbps - выше для 60fps хорошего качества
   });
 
   const videoPath = path.join(videoDir, 'gameplay.mp4');
   await recorder.start(videoPath);
 
   // Принудительно тикаем игровые кадры пока recorder пишет
-  // (в headless RAF throttled до ~10fps или меньше - без этого видео будет статичным)
-  // Цель: 60 game ticks в секунду + 1 render() на каждый tick
-  // tick interval = 50ms (20 циклов/сек, по 3 game frame = 60 fps)
+  // (в headless RAF throttled - без этого видео будет статичным)
+  // Целевая частота: 60 game ticks/sec (совпадает с recorder fps)
+  // tick interval = 16ms (~60 FPS), 1 game frame на каждый tick
   const recordDuration = 30000;
-  const tickIntervalMs = 50;
-  const framesPerTick = 3;
+  const tickIntervalMs = 16;  // ~60 ticks/sec
+  const framesPerTick = 1;
   const startTime = Date.now();
   let frameCounter = 0;
   let lastTapAt = startTime;
