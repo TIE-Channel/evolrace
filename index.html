@@ -9910,21 +9910,22 @@ document.addEventListener('click', lockOrientation, { once: true });
         if (tieCorner) tieCorner.style.display = 'flex';
       } else if (currentState === STATE.RUN) {
         // Banner СКРЫТ во время активного геймплея - устраняет микро-лаги от AdMob refresh
-        // (AdMob каждые 60 сек делает HTTP запрос + рендер на UI thread = подтормаживание)
-        // Banner показывается на READY/OVER экранах где лаг не критичен
         if (bannerShown) hideBannerAd();
-        // Кнопка "Remove Ads" всегда видна если реклама не куплена
-        if (!adsRemoved) {
-          removeAdsBtn.style.display = 'block';
-        } else {
-          removeAdsBtn.style.display = 'none';
-        }
+        // Кнопка "Remove Ads" СКРЫТА во время игры (не отвлекает от геймплея)
+        removeAdsBtn.style.display = 'none';
         // Скрываем TIE логотип во время игры
         const tieCorner = document.getElementById('tie-corner-link');
         if (tieCorner) tieCorner.style.display = 'none';
       } else if (currentState === STATE.OVER) {
         if (!adsRemoved) {
-          if (isCapacitor) showBannerAd();
+          // Сброс bannerShown чтобы showBannerAd точно вызвалась
+          // (если предыдущий показ зафейлился или banner был скрыт на RUN)
+          if (isCapacitor) {
+            // Форсируем показ banner на OVER экране (каждый game over)
+            // Сбрасываем флаг и через 100мс запрашиваем показ - даёт AdMob время
+            bannerShown = false;
+            setTimeout(() => showBannerAd(), 100);
+          }
           removeAdsBtn.style.display = 'block';
         } else {
           removeAdsBtn.style.display = 'none';
