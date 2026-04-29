@@ -118,44 +118,62 @@ async function applyCheatLevel(page, levelNum) {
 }
 
 // Ждёт N миллисекунд игрового времени через _evolrace.tickFrames
-// Батчами по 30 кадров с короткими паузами чтобы не блокировать event loop
-// и не выжирать RAM (важно в headless CI)
+// Батчами по 10 кадров с timeout 5 сек на батч (защита от висящих eval)
 async function waitGameFrames(page, durationMs) {
   const targetFrames = Math.round(durationMs * 60 / 1000); // 60 fps
-  const BATCH_SIZE = 30; // ~0.5 сек игрового времени за батч
+  const BATCH_SIZE = 10; // меньше батч = быстрее каждый eval
+  const BATCH_TIMEOUT_MS = 5000; // максимум 5 сек на один tickFrames call
   const batches = Math.ceil(targetFrames / BATCH_SIZE);
   let totalTicked = 0;
+  const startTime = Date.now();
+  const MAX_TOTAL_MS = durationMs + 30000; // не больше чем durationMs + 30 сек на всё
+
+  console.log(`    waitGameFrames start: target ${targetFrames} frames in ${batches} batches`);
 
   for (let i = 0; i < batches; i++) {
+    if (Date.now() - startTime > MAX_TOTAL_MS) {
+      console.log(`    waitGameFrames: TIMEOUT exceeded ${MAX_TOTAL_MS}ms, stopping`);
+      break;
+    }
+
     const remaining = targetFrames - totalTicked;
     const batchSize = Math.min(BATCH_SIZE, remaining);
 
     try {
-      const result = await page.evaluate((n) => {
-        if (window._evolrace && window._evolrace.tickFrames) {
-          return window._evolrace.tickFrames(n);
-        }
-        return -1;
-      }, batchSize);
+      // Гонка: либо eval вернётся, либо timeout
+      const result = await Promise.race([
+        page.evaluate((n) => {
+          if (window._evolrace && window._evolrace.tickFrames) {
+            return window._evolrace.tickFrames(n);
+          }
+          return -1;
+        }, batchSize),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('batch timeout')), BATCH_TIMEOUT_MS))
+      ]);
 
       if (result === -1) {
-        console.log(`    waitGameFrames: tickFrames not available, fallback to sleep`);
-        await sleep(durationMs - i * (BATCH_SIZE * 1000 / 60));
+        console.log(`    waitGameFrames: tickFrames unavailable, fallback to plain sleep`);
+        const remainingMs = durationMs - (i * BATCH_SIZE * 1000 / 60);
+        if (remainingMs > 0) await sleep(Math.min(remainingMs, 5000));
         return;
       }
 
       totalTicked += result;
+      // Лог каждые 5 батчей
+      if (i % 5 === 0 || i === batches - 1) {
+        console.log(`      batch ${i + 1}/${batches}: ticked ${totalTicked}/${targetFrames}`);
+      }
     } catch (e) {
-      console.log(`    waitGameFrames batch ${i} failed: ${e.message}`);
+      console.log(`    waitGameFrames batch ${i + 1}/${batches} failed: ${e.message}`);
       break;
     }
 
-    // Микропауза между батчами - даёт event loop перевести дух,
-    // позволяет render() отрисовать кадр в реальный canvas
+    // Микропауза между батчами
     await sleep(20);
   }
 
-  console.log(`    waitGameFrames(${durationMs}ms = ${targetFrames} frames): ticked=${totalTicked}`);
+  const elapsed = Date.now() - startTime;
+  console.log(`    waitGameFrames done: ticked=${totalTicked}/${targetFrames} in ${elapsed}ms`);
 
   // Финальный sleep чтобы render успел показать последний кадр
   await sleep(100);
@@ -287,11 +305,16 @@ async function takeScreenshots(device) {
       // Отключаем throttling background tabs/headless mode
       '--disable-backgrounding-occluded-windows',
       '--disable-background-timer-throttling',
-      '--disable-renderer-backgrounding'
+      '--disable-renderer-backgrounding',
+      // Mute аудио - в headless audio может вешаться без устройств вывода
+      '--mute-audio'
     ]
   });
 
   const page = await browser.newPage();
+  // Игнорируем browser dialogs (might block tickFrames)
+  page.on('dialog', async dialog => { try { await dialog.dismiss(); } catch (e) {} });
+
   await page.goto(`file://${HTML_FILE}`);
 
   // Ждём пока splash пройдёт (5 секунд)

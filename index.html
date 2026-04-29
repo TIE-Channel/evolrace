@@ -443,7 +443,14 @@ document.addEventListener('click', lockOrientation, { once: true });
     tickFrames: function(numFrames) {
       try {
         let actualFrames = 0;
+        const startTime = Date.now();
+        const MAX_MS = 2000; // максимум 2 секунды на любой батч
         for (let i = 0; i < numFrames; i++) {
+          // Защита от висящего batch - если что-то зациклилось в update()
+          if (Date.now() - startTime > MAX_MS) {
+            console.warn('tickFrames: timeout reached at frame', actualFrames);
+            break;
+          }
           if (state === STATE.INTRO) {
             updateIntro();
           } else if (state === STATE.OUTRO) {
@@ -452,10 +459,17 @@ document.addEventListener('click', lockOrientation, { once: true });
             frameCount++;
           } else if (state === STATE.RUN) {
             update();
+          } else if (state === STATE.OVER) {
+            // ничего не делаем - просто остаёмся в game over
+            break;
           }
           // Рендерим после update - чтобы canvas обновился (важно для видео записи)
           if (typeof render === 'function') {
-            render();
+            try {
+              render();
+            } catch (re) {
+              console.warn('tickFrames render error:', re);
+            }
           }
           actualFrames++;
         }
