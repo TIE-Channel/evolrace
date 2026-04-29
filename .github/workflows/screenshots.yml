@@ -4,6 +4,15 @@ on:
   workflow_dispatch:  # ручной запуск
   push:
     branches: [main]
+    paths:
+      - 'index.html'
+      - 'screenshots.js'
+      - '.github/workflows/screenshots.yml'
+
+# Только один run этого workflow в один момент - новый push отменяет предыдущий
+concurrency:
+  group: screenshots-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   generate-screenshots:
