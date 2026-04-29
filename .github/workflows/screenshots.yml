@@ -1,0 +1,77 @@
+name: Generate Screenshots and Video
+
+on:
+  workflow_dispatch:  # ручной запуск
+  push:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - 'screenshots.js'
+      - '.github/workflows/screenshots.yml'
+
+jobs:
+  generate-screenshots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install ffmpeg (для видео записи)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install dependencies
+        run: |
+          # Puppeteer + screen recorder
+          npm install --save-dev puppeteer puppeteer-screen-recorder
+
+      - name: Verify Puppeteer install
+        run: |
+          ls -la node_modules/puppeteer/.local-chromium 2>/dev/null || \
+          ls -la node_modules/puppeteer/.cache 2>/dev/null || \
+          echo "(checking for Chromium binary)"
+          which ffmpeg
+          ffmpeg -version | head -1
+
+      - name: Generate screenshots and video
+        run: |
+          node screenshots.js
+        env:
+          # CI specific - помогает Puppeteer с sandbox в GitHub Actions
+          PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'false'
+
+      - name: List generated files
+        if: always()
+        run: |
+          if [ -d "screenshots" ]; then
+            echo "=== Generated files ==="
+            find screenshots -type f -exec ls -lh {} \;
+          else
+            echo "WARNING: screenshots directory not created"
+          fi
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evolrace-screenshots
+          path: screenshots/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload videos separately
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evolrace-gameplay-videos
+          path: screenshots/**/video/*.mp4
+          if-no-files-found: warn
+          retention-days: 30
