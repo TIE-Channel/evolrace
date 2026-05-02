@@ -9513,15 +9513,15 @@ document.addEventListener('click', lockOrientation, { once: true });
   // === AdMob Ad IDs ===
   // ВАЖНО: тестовые ID работают всегда, продакшен ID нужно получить в AdMob Console
   // Тестовые: ca-app-pub-3940256099942544/* (Google официальные test IDs)
-  // Продакшен: ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY (из вашего AdMob аккаунта)
-  const IS_TEST_MODE = true; // ставьте false когда будут реальные ID
+  // Продакшен: ca-app-pub-4166550433924758/* (наш реальный AdMob аккаунт)
+  const IS_TEST_MODE = false; // ПРОДАКШЕН - реальные ID, реальная реклама
 
   const AD_IDS = IS_TEST_MODE ? {
     banner: 'ca-app-pub-3940256099942544/6300978111',       // Google test banner
     interstitial: 'ca-app-pub-3940256099942544/1033173712'  // Google test interstitial
   } : {
-    banner: 'ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY',       // ВАШ banner ID
-    interstitial: 'ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY'  // ВАШ interstitial ID
+    banner: 'ca-app-pub-4166550433924758/5813923861',       // Real banner ID
+    interstitial: 'ca-app-pub-4166550433924758/1874678850'  // Real interstitial ID
   };
 
   // ID продукта в Google Play Console
